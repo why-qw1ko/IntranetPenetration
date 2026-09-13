@@ -1,0 +1,22 @@
+.confirm-modal {
+  text-align: center;
+}
+
+.confirm-icon {
+  margin-bottom: 8px;
+  color: var(--orange);
+  display: flex;
+  justify-content: center;
+}
+
+.confirm-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin-top: 20px;
+}
+
+.confirm-actions .btn {
+  min-width: 90px;
+  padding: 8px 20px;
+}

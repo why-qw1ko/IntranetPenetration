@@ -1,0 +1,17 @@
+{
+  "main": "index.html",
+  "preload": "preload/services.js",
+  "logo": "logo.png",
+  "features": [
+    {
+      "code": "devtunnel",
+      "explain": "内网穿透助手 - 基于 DevTunnel / Frp 实现远程访问",
+      "cmds": [
+        "dev",
+        "内网",
+        "穿透",
+        "tunnel"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+.info-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.info-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.info-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  min-width: 56px;
+  flex-shrink: 0;
+}
+
+.info-val {
+  font-size: 13px;
+  color: var(--text);
+  word-break: break-all;
+}
+
+.info-val.mono {
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+  color: var(--brand);
+  font-weight: 500;
+}
+
+.info-val.url {
+  color: var(--brand);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 3px;
+}
+
+.info-val.url:hover { opacity: 0.7; }
+
+.info-item .form-input,
+.info-item .form-select {
+  flex: 1;
+  padding: 7px 10px;
+  font-size: 12px;
+}
+
+.detail-controls {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
