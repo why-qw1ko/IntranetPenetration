@@ -1,0 +1,236 @@
+.tutorial-page {
+  padding: 24px 28px;
+  max-width: 920px;
+  margin: 0 auto;
+}
+
+.tutorial-section {
+  margin-bottom: 32px;
+}
+
+.tutorial-section:last-child {
+  margin-bottom: 0;
+}
+
+.tutorial-section-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-title);
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tutorial-card {
+  background: var(--bg);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 22px 24px;
+  margin-bottom: 14px;
+  overflow: hidden;
+  transition: box-shadow 0.2s;
+}
+
+.tutorial-card:hover {
+  box-shadow: var(--shadow-lg, 0 4px 16px rgba(0,0,0,0.08));
+}
+
+.tutorial-card-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-title);
+  margin-bottom: 14px;
+}
+
+.tutorial-steps {
+  padding: 0 0 0 18px;
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.7;
+}
+
+.tutorial-steps li {
+  padding: 4px 0;
+}
+
+ul.tutorial-steps {
+  list-style: disc;
+}
+
+ol.tutorial-steps {
+  list-style: decimal;
+}
+
+.tutorial-steps li + li {
+  border-top: 1px solid var(--border);
+}
+
+.tutorial-tip {
+  background: var(--brand-bg);
+  border-left: 3px solid var(--brand);
+  padding: 12px 16px;
+  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
+  font-size: 12px;
+  color: var(--text);
+  line-height: 1.8;
+  margin: 12px 0;
+}
+
+.tutorial-tip b {
+  color: var(--brand);
+}
+
+.tutorial-warning {
+  background: var(--orange-bg);
+  border-left: 3px solid var(--orange);
+  padding: 12px 16px;
+  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
+  font-size: 12px;
+  color: var(--text);
+  line-height: 1.8;
+  margin: 12px 0;
+}
+
+.tutorial-warning b {
+  color: var(--orange);
+}
+
+.tutorial-code {
+  background: #1E1E2E;
+  color: #CDD6F4;
+  border-radius: var(--radius-sm);
+  padding: 14px 18px;
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-x: auto;
+  margin: 10px 0;
+  white-space: pre;
+}
+
+.tutorial-code .code-comment {
+  color: #6C7086;
+}
+
+.tutorial-code .code-key {
+  color: #89B4FA;
+}
+
+.tutorial-code .code-string {
+  color: #A6E3A1;
+}
+
+.tutorial-code .code-number {
+  color: #FAB387;
+}
+
+.tutorial-faq-item {
+  border-bottom: 1px solid var(--border);
+}
+
+.tutorial-faq-item:last-child {
+  border-bottom: none;
+}
+
+.tutorial-faq-q {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-title);
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.15s;
+}
+
+.tutorial-faq-q:hover {
+  color: var(--brand);
+}
+
+.tutorial-faq-q span {
+  transition: transform 0.2s;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.tutorial-faq-q.expanded span {
+  transform: rotate(90deg);
+}
+
+.tutorial-faq-a {
+  padding: 0 0 14px;
+  font-size: 13px;
+  color: var(--text-sub);
+  line-height: 1.8;
+}
+
+.tutorial-step-detail {
+  background: var(--bg-alt);
+  border-left: 3px solid var(--brand);
+  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
+  padding: 10px 16px;
+  margin: -4px 0 8px 18px;
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.9;
+}
+
+.tutorial-step-detail b {
+  color: var(--text-title);
+}
+
+.tutorial-sub-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-title);
+  margin: 16px 0 10px;
+}
+
+.tutorial-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: 12px;
+  table-layout: fixed;
+}
+
+.tutorial-table th,
+.tutorial-table td {
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  text-align: left;
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+
+.tutorial-table th {
+  background: var(--bg-alt);
+  font-weight: 600;
+  color: var(--text-title);
+}
+
+.tutorial-table td {
+  color: var(--text);
+}
+
+.tutorial-link {
+  color: var(--brand);
+  text-decoration: none;
+}
+
+.tutorial-link:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 860px) {
+  .tutorial-page {
+    padding: 16px 12px;
+  }
+
+  .tutorial-card {
+    padding: 16px 14px;
+  }
+}

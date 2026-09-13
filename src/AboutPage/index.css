@@ -1,0 +1,94 @@
+.about-page {
+  padding: 24px 28px;
+  max-width: 920px;
+  margin: 0 auto;
+  text-align: left;
+}
+
+.about-header {
+  text-align: left;
+  margin-bottom: 28px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.about-logo {
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+  flex-shrink: 0;
+}
+
+.about-name {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-title);
+  margin-bottom: 2px;
+}
+
+.about-version {
+  font-size: 13px;
+  color: var(--text-sub);
+}
+
+.about-desc {
+  text-align: left;
+  font-size: 14px;
+  color: var(--text-sub);
+  margin-bottom: 28px;
+  line-height: 1.8;
+}
+
+.about-card {
+  background: var(--bg);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 22px 24px;
+  margin-bottom: 16px;
+  text-align: left;
+}
+
+.about-card-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-title);
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.about-list {
+  list-style: none;
+  padding: 0;
+}
+
+.about-list li {
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.9;
+  padding: 3px 0;
+  padding-left: 18px;
+  position: relative;
+}
+
+.about-list li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 11px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--brand);
+}
+
+.about-footer {
+  text-align: left;
+  padding: 24px 0 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.8;
+}
