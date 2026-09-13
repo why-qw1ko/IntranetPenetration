@@ -1,0 +1,308 @@
+.dir-path {
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+  font-size: 12px;
+}
+
+.dir-row {
+  display: flex;
+  gap: 8px;
+}
+
+.dir-input {
+  flex: 1;
+  min-width: 0;
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+  font-size: 12px;
+}
+
+.port-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.port-input {
+  width: 120px;
+}
+
+/* 模式选择 */
+.mode-card {
+  border-left: 3px solid var(--blue);
+}
+
+.mode-options {
+  display: flex;
+  gap: 10px;
+}
+
+.mode-option {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px;
+  border-radius: var(--radius-sm);
+  border: 2px solid var(--border);
+  background: var(--bg);
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: left;
+}
+
+.mode-option:hover {
+  border-color: var(--brand);
+  background: var(--brand-bg);
+}
+
+.mode-option.active {
+  border-color: var(--brand);
+  background: var(--brand-bg);
+}
+
+.mode-option-icon {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-xs);
+  background: var(--bg-alt);
+  color: var(--text);
+  flex-shrink: 0;
+}
+
+.mode-option.active .mode-option-icon {
+  background: var(--brand);
+  color: #fff;
+}
+
+.mode-option-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-title);
+  margin-bottom: 2px;
+}
+
+.mode-option-desc {
+  font-size: 11px;
+  color: var(--text-sub);
+  line-height: 1.4;
+}
+
+/* Frp 服务器提示 */
+.frp-hint-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--orange-bg);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--orange);
+}
+
+.frp-server-summary {
+  padding: 8px 0;
+}
+
+/* Frp 代理类型选择 */
+.frp-type-options {
+  display: flex;
+  gap: 8px;
+}
+
+.frp-type-btn {
+  flex: 1;
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  border: 2px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: center;
+}
+
+.frp-type-btn:hover {
+  border-color: var(--brand);
+  background: var(--brand-bg);
+}
+
+.frp-type-btn.active {
+  border-color: var(--brand);
+  background: var(--brand-bg);
+  color: var(--brand);
+}
+
+/* 教程卡片 */
+.tutorial-card {
+  background: var(--bg);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 18px;
+  margin-bottom: 12px;
+}
+
+.tutorial-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-title);
+  margin-bottom: 14px;
+}
+
+.tutorial-steps {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 16px 0;
+}
+
+.tutorial-steps li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 0;
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.tutorial-steps .step-num {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--brand-bg);
+  color: var(--brand);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.tutorial-faq {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.tutorial-faq-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-title);
+  margin-bottom: 10px;
+}
+
+.faq-item {
+  margin-bottom: 10px;
+}
+
+.faq-q {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+
+.faq-a {
+  font-size: 12px;
+  color: var(--text-sub);
+  line-height: 1.5;
+}
+
+/* 运行状态卡片 */
+.status-card {
+  border-left: 3px solid var(--brand);
+}
+
+.status-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.status-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--brand);
+}
+
+.status-dot::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--brand);
+  animation: pulse 2s ease infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.status-info {
+  font-size: 12px;
+  color: var(--text-sub);
+  margin-bottom: 6px;
+  display: flex;
+  gap: 6px;
+}
+
+.status-info-label {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.status-info-value {
+  color: var(--text);
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.status-url {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--brand-bg);
+  border-radius: var(--radius-sm);
+  margin: 10px 0;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.status-url:hover {
+  background: rgba(16, 185, 129, 0.14);
+}
+
+.status-url-text {
+  flex: 1;
+  font-size: 12px;
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+  color: var(--brand);
+  word-break: break-all;
+  font-weight: 500;
+}
+
+.status-url-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.status-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}

@@ -1,0 +1,241 @@
+/* Tab 栏 */
+.tab-bar {
+  display: flex;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  padding: 0 20px;
+  flex-shrink: 0;
+}
+
+.tab-item {
+  position: relative;
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-sub);
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: color 0.15s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tab-item:hover { color: var(--text); }
+
+.tab-item.active {
+  color: var(--brand);
+}
+
+.tab-item.active::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 16px;
+  right: 16px;
+  height: 2px;
+  background: var(--brand);
+  border-radius: 2px 2px 0 0;
+}
+
+.tab-count {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--bg-alt);
+  color: var(--text-sub);
+}
+
+.tab-item.active .tab-count {
+  background: var(--brand-bg);
+  color: var(--brand);
+}
+
+.frp-server-card {
+  border-left: 3px solid var(--blue);
+}
+
+.frp-server-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.frp-proxy-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.frp-proxy-card {
+  cursor: default;
+}
+
+.frp-proxy-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.frp-proxy-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-title);
+}
+
+.frp-proxy-type {
+  font-size: 11px;
+  color: var(--text-sub);
+  background: var(--bg-alt);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.frp-proxy-info {
+  font-size: 12px;
+  color: var(--text-sub);
+  margin-bottom: 10px;
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+}
+
+.frp-proxy-url {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  background: var(--brand-bg);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.frp-proxy-url:hover {
+  background: var(--brand-bg-hover, rgba(16, 185, 129, 0.15));
+}
+
+.frp-proxy-url-text {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--brand);
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+  word-break: break-all;
+}
+
+.frp-proxy-url-hint {
+  font-size: 11px;
+  color: var(--text-sub);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.frp-proxy-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.frp-form-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  animation: fadeIn 0.15s ease;
+}
+
+.frp-form-box {
+  background: var(--bg);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.12);
+  padding: 24px;
+  width: 380px;
+  max-height: 80vh;
+  overflow-y: auto;
+  animation: modalIn 0.2s ease;
+}
+
+.frp-form-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-title);
+  margin-bottom: 16px;
+}
+
+.frp-form-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.frp-form-actions .btn {
+  flex: 1;
+}
+
+.frp-server-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.frp-guide {
+  padding: 16px;
+}
+
+.frp-guide-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-title);
+  margin-bottom: 12px;
+}
+
+.frp-guide-text {
+  font-size: 13px;
+  color: var(--text-sub);
+  line-height: 1.7;
+  margin-bottom: 8px;
+}
+
+.frp-guide-link {
+  color: var(--brand);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.frp-guide-link:hover {
+  text-decoration: underline;
+}
+
+/* 配置文件路径 */
+.frp-config-path-card {
+  border-left: 3px solid var(--text-sub);
+}
+
+.frp-config-path-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.frp-config-path-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-sub);
+  flex-shrink: 0;
+}
+
+.frp-config-path-value {
+  flex: 1;
+  font-size: 12px;
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+  color: var(--text);
+  word-break: break-all;
+}
