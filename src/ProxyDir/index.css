@@ -26,10 +26,6 @@
 }
 
 /* 模式选择 */
-.mode-card {
-  border-left: 3px solid var(--blue);
-}
-
 .mode-options {
   display: flex;
   gap: 10px;
@@ -216,10 +212,6 @@
 }
 
 /* 运行状态卡片 */
-.status-card {
-  border-left: 3px solid var(--brand);
-}
-
 .status-header {
   display: flex;
   align-items: center;

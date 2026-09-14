@@ -93,7 +93,7 @@ export default function App () {
   }, [loadLoginStatus])
 
   const handleLogin = useCallback(async () => {
-    await new Promise(r => setTimeout(r, 1000))
+    await new Promise(resolve => setTimeout(resolve, 1000))
     await Promise.all([loadLoginStatus(true), loadTunnels(true)])
   }, [loadLoginStatus, loadTunnels])
 
@@ -112,7 +112,7 @@ export default function App () {
       }
     })
     window.utools.onPluginOut(() => {
-      setView('')
+      // uTools 插件隐藏时保留当前界面，避免再次进入时 DevTunnel 分区没有子视图可渲染。
     })
   }, [loadLoginStatus, loadTunnels])
 
@@ -168,6 +168,8 @@ export default function App () {
             onRefreshLogin={refreshLogin}
             onLogin={handleLogin}
             onCreateNew={() => setView('create')}
+            onOpenProxyDir={() => handleSectionSelect('proxydir')}
+            onOpenFrp={() => handleSectionSelect('frp')}
             onSelectTunnel={goToDetail}
             onToggleSidebar={toggleSidebar}
             showToast={showToast}

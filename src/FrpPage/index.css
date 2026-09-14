@@ -52,10 +52,6 @@
   color: var(--brand);
 }
 
-.frp-server-card {
-  border-left: 3px solid var(--blue);
-}
-
 .frp-server-status {
   display: flex;
   align-items: center;
@@ -215,10 +211,6 @@
 }
 
 /* 配置文件路径 */
-.frp-config-path-card {
-  border-left: 3px solid var(--text-sub);
-}
-
 .frp-config-path-row {
   display: flex;
   align-items: center;

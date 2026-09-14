@@ -1,9 +1,9 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { Radio, ClipboardCopy, Code2, Square, Menu } from 'lucide-react'
+import { Radio, ClipboardCopy, Code2, Square, Menu, FolderOpen, Server, Activity, ArrowRight } from 'lucide-react'
 import ConfirmModal from '../ConfirmModal'
 import './index.css'
 
-export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onRefreshLogin, onLogin, onCreateNew, onSelectTunnel, onToggleSidebar, showToast }) {
+export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onRefreshLogin, onLogin, onCreateNew, onOpenProxyDir, onOpenFrp, onSelectTunnel, onToggleSidebar, showToast }) {
   const [tab, setTab] = useState(() => {
     try { return window.services?.getTabMemory?.('dashboard-tab') || 'tunnels' } catch (e) { return 'tunnels' }
   })
@@ -12,7 +12,7 @@ export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onR
   const [loginCode, setLoginCode] = useState(null)
   const [logs, setLogs] = useState([])
   const [confirmProps, setConfirmProps] = useState(null)
-  const [urlVersion, setUrlVersion] = useState(0)
+  const [, setUrlVersion] = useState(0)
   const [refreshLoginLoading, setRefreshLoginLoading] = useState(false)
   const [runningTunnel, setRunningTunnel] = useState(() => {
     // 从全局状态恢复运行中的隧道ID
@@ -90,8 +90,7 @@ export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onR
   const handleLogin = useCallback((provider) => {
     setLoginLoading(provider)
     const res = window.services.login(provider)
-    if (res.success) { showToast('请在浏览器中完成登录'); setShowLoginModal(false) }
-    else showToast('登录失败: ' + res.message, 'error')
+    if (res.success) { showToast('请在浏览器中完成登录'); setShowLoginModal(false) } else showToast('登录失败: ' + res.message, 'error')
     setLoginLoading('')
   }, [showToast])
 
@@ -119,8 +118,7 @@ export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onR
       onConfirm: async () => {
         setConfirmProps(null)
         const res = await window.services.deleteTunnel(tunnelId)
-        if (res.success) { showToast('已删除', 'success'); onRefresh() }
-        else showToast('删除失败: ' + (res.message || ''), 'error')
+        if (res.success) { showToast('已删除', 'success'); onRefresh() } else showToast('删除失败: ' + (res.message || ''), 'error')
       },
       onCancel: () => setConfirmProps(null)
     })
@@ -129,17 +127,19 @@ export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onR
   const handleStart = useCallback(async (e, tunnel) => {
     e.stopPropagation()
     // 获取最新端口信息
+    let latestTunnel = tunnel
     let port = tunnel.ports?.[0]?.portNumber
-    if (!port) {
-      try {
-        const full = await window.services.getTunnelWithPorts(tunnel.tunnelId)
-        port = full?.ports?.[0]?.portNumber
-      } catch (err) {}
-    }
+    try {
+      const full = await window.services.getTunnelWithPorts(tunnel.tunnelId)
+      if (full) {
+        latestTunnel = full
+        port = full.ports?.[0]?.portNumber || port
+      }
+    } catch (err) {}
     if (!port) { showToast('请先配置端口', 'error'); return }
 
     // 代理目录隧道：先启动本地文件服务器
-    const desc = tunnel.description || ''
+    const desc = latestTunnel.description || ''
     if (desc.startsWith('代理目录: ')) {
       const dirPath = desc.replace('代理目录: ', '')
       const fsResult = await window.services.startFileServer(dirPath, port)
@@ -149,14 +149,14 @@ export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onR
       }
     }
 
-    const result = window.services.startHost(tunnel.tunnelId, port, true)
+    const result = window.services.startHost(latestTunnel.tunnelId, port, latestTunnel.anonymous === true)
     if (result.success) {
-      setRunningTunnel(tunnel.tunnelId)
-      window.__runningTunnelId = tunnel.tunnelId // 持久化到全局
+      setRunningTunnel(latestTunnel.tunnelId)
+      window.__runningTunnelId = latestTunnel.tunnelId // 持久化到全局
       showToast('启动中...')
     } else {
       // 启动失败时回滚文件服务器
-      if ((tunnel.description || '').startsWith('代理目录: ')) window.services.stopFileServer()
+      if ((latestTunnel.description || '').startsWith('代理目录: ')) window.services.stopFileServer()
       showToast('启动失败: ' + result.message, 'error')
     }
   }, [showToast])
@@ -201,7 +201,7 @@ export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onR
           <button className='topbar-menu-btn' onClick={onToggleSidebar} title='菜单'>
             <Menu size={18} />
           </button>
-          <span className='topbar-title'>免费内网穿透</span>
+          <span className='topbar-title'>工作台</span>
           {loading && <span className='spinner' />}
         </div>
         <div className='topbar-right'>
@@ -225,33 +225,83 @@ export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onR
       {/* 隧道 Tab */}
       {tab === 'tunnels' && (
         <div className='page'>
-          <div className='card'>
-            {loginInfo?.loggedIn ? (
-              <div className='login-row'>
-                <div className='login-left'>
-                  <span className='badge badge-success'>已登录</span>
-                  <span className='login-user'>{loginInfo.summary}</span>
+          <div className='workbench-panel'>
+            <div className='workbench-head'>
+              <div>
+                <div className='workbench-title'>选择你现在要做的事</div>
+                <div className='workbench-subtitle'>常用操作放在这里，底层通道可以以后再细调</div>
+              </div>
+              <div className='workbench-metrics'>
+                <div className='metric-item'>
+                  <span className='metric-value'>{tunnels.length}</span>
+                  <span className='metric-label'>隧道</span>
                 </div>
-                <button className='btn btn-ghost btn-sm' onClick={handleLogout}>登出</button>
-              </div>
-            ) : loginInfo === null ? (
-              <div className='login-row'>
-                <span className='spinner' />
-                <span style={{ marginLeft: 10, color: 'var(--text-sub)', fontSize: 13 }}>检查中...</span>
-              </div>
-            ) : (
-              <div className='login-row'>
-                <div className='login-left'>
-                  <span className='badge badge-orange'>未登录</span>
-                  <span className='login-hint'>登录后可创建隧道</span>
+                <div className='metric-item'>
+                  <span className={`metric-value ${runningTunnel ? 'running' : ''}`}>{runningTunnel ? '1' : '0'}</span>
+                  <span className='metric-label'>运行中</span>
                 </div>
-                <button className='btn btn-brand btn-sm' onClick={() => setShowLoginModal(true)}>登录</button>
               </div>
-            )}
+            </div>
+
+            <div className='quick-actions'>
+              <button className='quick-action primary' onClick={onCreateNew} disabled={loading || tunnels.length >= 2}>
+                <span className='quick-icon'><Radio size={20} /></span>
+                <span className='quick-copy'>
+                  <span className='quick-title'>暴露本地端口</span>
+                  <span className='quick-desc'>适合调试 Web、API、Webhook 回调</span>
+                </span>
+                <ArrowRight size={16} />
+              </button>
+              <button className='quick-action' onClick={onOpenProxyDir}>
+                <span className='quick-icon'><FolderOpen size={20} /></span>
+                <span className='quick-copy'>
+                  <span className='quick-title'>分享本地目录</span>
+                  <span className='quick-desc'>选择文件夹后生成可访问地址</span>
+                </span>
+                <ArrowRight size={16} />
+              </button>
+              <button className='quick-action' onClick={onOpenFrp}>
+                <span className='quick-icon'><Server size={20} /></span>
+                <span className='quick-copy'>
+                  <span className='quick-title'>使用 Frp 内网穿透</span>
+                  <span className='quick-desc'>适合长期服务和固定服务器</span>
+                </span>
+                <ArrowRight size={16} />
+              </button>
+            </div>
+          </div>
+
+          <div className='account-strip'>
+            {loginInfo?.loggedIn
+              ? (
+                <div className='login-row'>
+                  <div className='login-left'>
+                    <span className='badge badge-success'>已登录</span>
+                    <span className='login-user'>{loginInfo.summary}</span>
+                  </div>
+                  <button className='btn btn-ghost btn-sm' onClick={handleLogout}>登出</button>
+                </div>
+                )
+              : loginInfo === null
+                ? (
+                  <div className='login-row'>
+                    <span className='spinner' />
+                    <span style={{ marginLeft: 10, color: 'var(--text-sub)', fontSize: 13 }}>检查中...</span>
+                  </div>
+                  )
+                : (
+                  <div className='login-row'>
+                    <div className='login-left'>
+                      <span className='badge badge-orange'>未登录</span>
+                      <span className='login-hint'>登录后可创建隧道</span>
+                    </div>
+                    <button className='btn btn-brand btn-sm' onClick={() => setShowLoginModal(true)}>登录</button>
+                  </div>
+                  )}
           </div>
 
           <div className='section-bar'>
-            <span className='section-label'>我的隧道</span>
+            <span className='section-label'><Activity size={14} /> 最近隧道</span>
             <button
               className='btn btn-brand btn-sm'
               onClick={onCreateNew}
@@ -267,71 +317,75 @@ export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onR
             </div>
           )}
 
-          {tunnels.length === 0 ? (
-            <div className='empty'>
-              <div className='empty-icon'><Radio size={40} strokeWidth={1.2} /></div>
-              <div className='empty-text'>暂无隧道</div>
-              <div className='empty-hint'>
-                {loginInfo?.loggedIn
-                  ? '点击上方「新建隧道」，将本地服务暴露到公网'
-                  : '请先登录，然后创建隧道'}
-              </div>
-            </div>
-          ) : (
-            tunnels.map((tunnel, i) => {
-              const isRunning = runningTunnel === tunnel.tunnelId
-              return (
-                <div key={tunnel.tunnelId || i} className='card card-clickable' onClick={() => onSelectTunnel(tunnel)}>
-                  <div className='tunnel-top'>
-                    <span className='tunnel-id'>{tunnel.tunnelId}</span>
-                    <span className={`badge ${isRunning ? 'badge-success' : 'badge-blue'}`}>
-                      {isRunning ? '运行中' : '就绪'}
-                    </span>
-                  </div>
-                  {tunnel.description && <div className='tunnel-desc'>{tunnel.description}</div>}
-                  {getTunnelUrl(tunnel) && (
-                    <div className='tunnel-url' onClick={(e) => handleCopyUrl(e, getTunnelUrl(tunnel))} title='点击复制'>
-                      {getTunnelUrl(tunnel)} <ClipboardCopy size={13} />
-                    </div>
-                  )}
-                  <div className='tunnel-bottom'>
-                    <span className='tunnel-ports'>
-                      端口: {tunnel.ports?.map(p => p.portNumber).join(', ') || '无'}
-                    </span>
-                    <div className='tunnel-actions'>
-                      {isRunning ? (
-                        <button className='icon-btn icon-btn-stop' onClick={(e) => handleStop(e, tunnel)} title='停止'>
-                          <svg width='18' height='18' viewBox='0 0 24 24' fill='currentColor'>
-                            <rect x='6' y='6' width='12' height='12' rx='1'/>
-                          </svg>
-                        </button>
-                      ) : (
-                        <button className='icon-btn icon-btn-start' onClick={(e) => handleStart(e, tunnel)} title='启动'>
-                          <svg width='18' height='18' viewBox='0 0 24 24' fill='currentColor'>
-                            <polygon points='5,3 19,12 5,21'/>
-                          </svg>
-                        </button>
-                      )}
-                      <button className='icon-btn icon-btn-copy' onClick={(e) => handleCopyUrl(e, getTunnelUrl(tunnel))} title='复制 URL'>
-                        <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'>
-                          <rect x='9' y='9' width='13' height='13' rx='2' ry='2'/>
-                          <path d='M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1'/>
-                        </svg>
-                      </button>
-                      <button className='icon-btn icon-btn-delete' onClick={(e) => handleDelete(e, tunnel.tunnelId)} title='删除'>
-                        <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'>
-                          <polyline points='3 6 5 6 21 6'/>
-                          <path d='M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2'/>
-                          <line x1='10' y1='11' x2='10' y2='17'/>
-                          <line x1='14' y1='11' x2='14' y2='17'/>
-                        </svg>
-                      </button>
-                    </div>
-                  </div>
+          {tunnels.length === 0
+            ? (
+              <div className='empty'>
+                <div className='empty-icon'><Radio size={40} strokeWidth={1.2} /></div>
+                <div className='empty-text'>暂无隧道</div>
+                <div className='empty-hint'>
+                  {loginInfo?.loggedIn
+                    ? '点击上方「新建隧道」，将本地服务暴露到公网'
+                    : '请先登录，然后创建隧道'}
                 </div>
+              </div>
               )
-            })
-          )}
+            : (
+                tunnels.map((tunnel, i) => {
+                  const isRunning = runningTunnel === tunnel.tunnelId
+                  return (
+                    <div key={tunnel.tunnelId || i} className='card card-clickable' onClick={() => onSelectTunnel(tunnel)}>
+                      <div className='tunnel-top'>
+                        <span className='tunnel-id'>{tunnel.tunnelId}</span>
+                        <span className={`badge ${isRunning ? 'badge-success' : 'badge-blue'}`}>
+                          {isRunning ? '运行中' : '就绪'}
+                        </span>
+                      </div>
+                      {tunnel.description && <div className='tunnel-desc'>{tunnel.description}</div>}
+                      {getTunnelUrl(tunnel) && (
+                        <div className='tunnel-url' onClick={(e) => handleCopyUrl(e, getTunnelUrl(tunnel))} title='点击复制'>
+                          {getTunnelUrl(tunnel)} <ClipboardCopy size={13} />
+                        </div>
+                      )}
+                      <div className='tunnel-bottom'>
+                        <span className='tunnel-ports'>
+                          端口: {tunnel.ports?.map(p => p.portNumber).join(', ') || '无'}
+                        </span>
+                        <div className='tunnel-actions'>
+                          {isRunning
+                            ? (
+                              <button className='icon-btn icon-btn-stop' onClick={(e) => handleStop(e, tunnel)} title='停止'>
+                                <svg width='18' height='18' viewBox='0 0 24 24' fill='currentColor'>
+                                  <rect x='6' y='6' width='12' height='12' rx='1' />
+                                </svg>
+                              </button>
+                              )
+                            : (
+                              <button className='icon-btn icon-btn-start' onClick={(e) => handleStart(e, tunnel)} title='启动'>
+                                <svg width='18' height='18' viewBox='0 0 24 24' fill='currentColor'>
+                                  <polygon points='5,3 19,12 5,21' />
+                                </svg>
+                              </button>
+                              )}
+                          <button className='icon-btn icon-btn-copy' onClick={(e) => handleCopyUrl(e, getTunnelUrl(tunnel))} title='复制 URL'>
+                            <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'>
+                              <rect x='9' y='9' width='13' height='13' rx='2' ry='2' />
+                              <path d='M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1' />
+                            </svg>
+                          </button>
+                          <button className='icon-btn icon-btn-delete' onClick={(e) => handleDelete(e, tunnel.tunnelId)} title='删除'>
+                            <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'>
+                              <polyline points='3 6 5 6 21 6' />
+                              <path d='M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2' />
+                              <line x1='10' y1='11' x2='10' y2='17' />
+                              <line x1='14' y1='11' x2='14' y2='17' />
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })
+              )}
         </div>
       )}
 
@@ -342,25 +396,30 @@ export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onR
             <div className='log-header'>
               <span>运行日志 ({logs.length})</span>
               <div style={{ display: 'flex', gap: 6 }}>
-                <button className='btn btn-ghost btn-sm' onClick={() => {
-                  const text = logs.map(l => `[${formatTime(l.time)}] [${l.type}] ${l.text}`).join('\n')
-                  window.utools?.copyText(text)
-                  showToast('日志已复制', 'success')
-                }}>复制</button>
+                <button
+                  className='btn btn-ghost btn-sm' onClick={() => {
+                    const text = logs.map(l => `[${formatTime(l.time)}] [${l.type}] ${l.text}`).join('\n')
+                    window.utools?.copyText(text)
+                    showToast('日志已复制', 'success')
+                  }}
+                >复制
+                </button>
                 <button className='btn btn-ghost btn-sm' onClick={() => { window.services?.clearLogs(); setLogs([]) }}>清空</button>
               </div>
             </div>
             <div className='log-content' style={{ maxHeight: 'calc(100vh - 180px)' }}>
-              {logs.length === 0 ? (
-                <div className='log-empty'>暂无日志</div>
-              ) : (
-                logs.map((log, i) => (
-                  <div key={i} className={`log-line log-${log.type}`}>
-                    <span className='log-time'>{formatTime(log.time)}</span>
-                    <span className='log-text'>{log.text}</span>
-                  </div>
-                ))
-              )}
+              {logs.length === 0
+                ? (
+                  <div className='log-empty'>暂无日志</div>
+                  )
+                : (
+                    logs.map((log, i) => (
+                      <div key={i} className={`log-line log-${log.type}`}>
+                        <span className='log-time'>{formatTime(log.time)}</span>
+                        <span className='log-text'>{log.text}</span>
+                      </div>
+                    ))
+                  )}
               <div ref={logEndRef} />
             </div>
           </div>
@@ -401,16 +460,22 @@ export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onR
             <div className='modal-title'>请在浏览器中输入验证码</div>
             <div className='modal-sub'>页面已自动打开，如未打开请手动访问</div>
             <div className='code-display'>{loginCode.code}</div>
-            <button className='btn btn-brand btn-sm' style={{ marginTop: 16 }} onClick={() => {
-              window.utools?.copyText(loginCode.code)
-              try { window.utools.shellOpenExternal(loginCode.url) } catch (e) {}
-              showToast('验证码已复制，浏览器已打开', 'success')
-            }}>复制验证码并打开页面</button>
-            <div style={{ marginTop: 12 }}>
-              <a className='code-link' href='#' onClick={(e) => {
-                e.preventDefault()
+            <button
+              className='btn btn-brand btn-sm' style={{ marginTop: 16 }} onClick={() => {
+                window.utools?.copyText(loginCode.code)
                 try { window.utools.shellOpenExternal(loginCode.url) } catch (e) {}
-              }}>手动打开页面</a>
+                showToast('验证码已复制，浏览器已打开', 'success')
+              }}
+            >复制验证码并打开页面
+            </button>
+            <div style={{ marginTop: 12 }}>
+              <a
+                className='code-link' href='#' onClick={(e) => {
+                  e.preventDefault()
+                  try { window.utools.shellOpenExternal(loginCode.url) } catch (e) {}
+                }}
+              >手动打开页面
+              </a>
             </div>
             <button className='modal-cancel' style={{ marginTop: 12 }} onClick={() => setLoginCode(null)}>关闭</button>
           </div>

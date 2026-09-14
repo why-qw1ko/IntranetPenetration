@@ -1,6 +1,11 @@
 import { useState, useCallback, useEffect } from 'react'
 import './index.css'
 
+function parsePort (value) {
+  const num = Number(value)
+  return Number.isInteger(num) && num >= 1 && num <= 65535 ? num : null
+}
+
 export default function CreateTunnel ({ onBack, onCreated, showToast }) {
   const [port, setPort] = useState('80')
   const [protocol, setProtocol] = useState('auto')
@@ -24,8 +29,8 @@ export default function CreateTunnel ({ onBack, onCreated, showToast }) {
     e.preventDefault()
     setError('')
     if (!port) { setError('请输入端口号'); return }
-    const portNum = parseInt(port)
-    if (isNaN(portNum) || portNum < 1 || portNum > 65535 || portNum !== parseFloat(port)) {
+    const portNum = parsePort(port)
+    if (!portNum) {
       setError('端口号必须是 1-65535 之间的整数')
       return
     }
@@ -34,7 +39,7 @@ export default function CreateTunnel ({ onBack, onCreated, showToast }) {
     try {
       const tunnel = await window.services.createTunnel({
         tunnelId: tunnelId || undefined,
-        port: parseInt(port),
+        port: portNum,
         protocol,
         anonymous,
         description: description || undefined,
@@ -56,7 +61,7 @@ export default function CreateTunnel ({ onBack, onCreated, showToast }) {
         <div className='topbar-left'>
           <button className='back-btn' onClick={onBack} title='返回'>
             <svg width='16' height='16' viewBox='0 0 16 16' fill='none'>
-              <path d='M10 12L6 8L10 4' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'/>
+              <path d='M10 12L6 8L10 4' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round' />
             </svg>
           </button>
           <span className='topbar-title'>新建隧道</span>

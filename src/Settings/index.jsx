@@ -3,6 +3,11 @@ import { Menu } from 'lucide-react'
 import ConfirmModal from '../ConfirmModal'
 import './index.css'
 
+function isValidPort (value) {
+  const num = Number(value)
+  return Number.isInteger(num) && num >= 1 && num <= 65535
+}
+
 export default function Settings ({ onToggleSidebar, showToast }) {
   const [config, setConfig] = useState({ path: '', defaultPort: '80', defaultProtocol: 'auto', defaultAnonymous: true })
   const [pathStatus, setPathStatus] = useState(null)
@@ -57,6 +62,7 @@ export default function Settings ({ onToggleSidebar, showToast }) {
 
   const handleSave = useCallback(() => {
     if (pathStatus && !pathStatus.valid) { showToast('devtunnel 路径无效', 'error'); return }
+    if (!isValidPort(config.defaultPort)) { showToast('默认端口必须是 1-65535 之间的整数', 'error'); return }
     // 保存 devtunnel 配置
     const res = window.services.saveConfig(config)
     if (!res.success) { showToast('保存失败: ' + res.message, 'error'); return }

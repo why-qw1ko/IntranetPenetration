@@ -1,81 +1,88 @@
-import { AlertTriangle, Lock, Wrench, ClipboardList, RefreshCw, Menu } from 'lucide-react'
+/* global __APP_VERSION__ */
+import { AlertTriangle, Lock, Wrench, ClipboardList, RefreshCw, Menu, ShieldCheck } from 'lucide-react'
 import './index.css'
 
-export default function AboutPage({ onToggleSidebar }) {
+export default function AboutPage ({ onToggleSidebar }) {
   return (
-    <div className="content-wrap">
-      <div className="topbar">
-        <div className="topbar-left">
-          <button className="topbar-menu-btn" onClick={onToggleSidebar}><Menu size={18} /></button>
-          <span className="topbar-title">关于本项目</span>
+    <div className='content-wrap'>
+      <div className='topbar'>
+        <div className='topbar-left'>
+          <button className='topbar-menu-btn' onClick={onToggleSidebar}><Menu size={18} /></button>
+          <span className='topbar-title'>关于本项目</span>
         </div>
       </div>
-      <div className="page">
-        <div className="about-page">
-          <div className="about-header">
-            <img src="./logo.png" className="about-logo" alt="logo" />
+      <div className='page'>
+        <div className='about-page'>
+          <div className='about-header about-card'>
+            <img src='./logo.png' className='about-logo' alt='logo' />
             <div>
-              <div className="about-name">内网穿透助手</div>
-              <div className="about-version">v{__APP_VERSION__}</div>
+              <div className='about-name'>内网穿透助手</div>
+              <div className='about-version'>v{__APP_VERSION__}</div>
+              <p className='about-desc'>
+                面向开发调试、远程演示和临时文件分享的 uTools 本地插件。它把 DevTunnel、Frp 和目录代理整理到一个轻量操作台里，让你少记命令，多关注正在暴露什么服务。
+              </p>
             </div>
           </div>
 
-          <p className="about-desc">
-            一款基于 uTools 平台的内网穿透管理工具，集成 Microsoft DevTunnel 和 Frp 两种穿透方案，帮助开发者快速将本地服务暴露到公网，便于调试、演示和远程访问。
-          </p>
+          <div className='about-grid'>
+            <div className='about-card'>
+              <div className='about-card-title'><Wrench size={16} /> 核心能力</div>
+              <ul className='about-list'>
+                <li><b>暴露本地端口</b>：通过 DevTunnel 快速生成公网访问地址，适合 Webhook、API 和本地 Web 项目调试。</li>
+                <li><b>分享本地目录</b>：内置只读 HTTP 文件服务，可将选定文件夹临时暴露给外部访问。</li>
+                <li><b>Frp 内网穿透</b>：连接你的 frps 服务端，用一个 frpc 进程承载多条代理规则。</li>
+              </ul>
+            </div>
 
-          <div className="about-card">
-            <div className="about-card-title"><AlertTriangle size={16} /> 免责声明</div>
-            <ul className="about-list">
-              <li>本工具仅提供内网穿透服务的管理界面，实际穿透服务由第三方提供（Microsoft DevTunnel / Frp），使用者需自行了解相关服务的使用条款和限制。</li>
-              <li>使用本工具进行内网穿透所产生的任何直接或间接损失（包括但不限于数据泄露、服务中断、财产损失等），开发者不承担任何责任。</li>
-              <li>使用者通过本工具暴露的本地服务内容，由使用者自行负责。请勿将本工具用于非法用途，如传播违法信息、侵犯他人权益等。</li>
-              <li>本工具不对第三方服务的稳定性、安全性和可用性做任何保证。穿透服务可能因网络环境、服务提供商策略变更等原因中断或不可用。</li>
-              <li>使用 Frp 自建穿透服务时，服务器的安全配置由使用者自行负责。请确保服务器已正确配置防火墙、访问控制等安全措施。</li>
-              <li>本工具不收集任何用户数据。所有配置信息仅存储在本地 uTools 数据库中，不会上传到任何服务器。</li>
-              <li>使用本工具即表示您已阅读、理解并同意本免责声明的全部内容。</li>
+            <div className='about-card'>
+              <div className='about-card-title'><ClipboardList size={16} /> 适用场景</div>
+              <ul className='about-list'>
+                <li>本地开发调试、第三方回调联调、临时远程演示。</li>
+                <li>临时文件共享、静态页面预览、内网设备接口调试。</li>
+                <li>已有公网服务器时，用 Frp 维护更长期、固定入口的代理。</li>
+              </ul>
+            </div>
+          </div>
+
+          <div className='about-card'>
+            <div className='about-card-title'><Lock size={16} /> 隐私与数据</div>
+            <ul className='about-list'>
+              <li>插件配置优先保存在 uTools 本地存储或本地数据库中，路径、frpc 路径等本机相关配置不会主动同步。</li>
+              <li>DevTunnel 登录使用官方 CLI 的设备代码流程；插件不接触、不保存你的账号密码。</li>
+              <li>Frp Token 保存在本地存储中，不随 uTools 数据库同步；运行日志中会做脱敏显示。</li>
+              <li>启动穿透后，你暴露的服务会按所选通道对外可访问，请确认本地服务本身的鉴权和内容安全。</li>
             </ul>
           </div>
 
-          <div className="about-card">
-            <div className="about-card-title"><Lock size={16} /> 隐私说明</div>
-            <ul className="about-list">
-              <li>所有隧道配置、服务器地址、Token 等信息均存储在本地 uTools 数据库中，不会上传到任何云端。</li>
-              <li>本工具不包含任何数据上报、用户行为追踪或统计分析功能。</li>
-              <li>登录 DevTunnel 时使用的是 Microsoft 官方的设备代码认证流程，本工具不存储您的 Microsoft 账号密码。</li>
-              <li>Frp 连接仅在您主动启动时建立，不会在后台保持长连接。</li>
+          <div className='about-card'>
+            <div className='about-card-title'><ShieldCheck size={16} /> 使用边界</div>
+            <ul className='about-list'>
+              <li>本插件负责管理本机 CLI、配置和本地文件服务；DevTunnel 服务由 Microsoft 提供，Frp 服务端由你自行部署或维护。</li>
+              <li>Frp 的“测试端口”只验证服务器端口是否可连通，不代表 Token 已通过认证；认证结果以启动 frpc 后的日志为准。</li>
+              <li>请勿将未加鉴权的管理后台、私密文件或敏感接口直接暴露到公网。</li>
             </ul>
           </div>
 
-          <div className="about-card">
-            <div className="about-card-title"><Wrench size={16} /> 技术说明</div>
-            <ul className="about-list">
-              <li><b>DevTunnel</b> — 由 Microsoft 提供的免费内网穿透服务，基于 Azure 基础设施，无需注册即可使用（GitHub 账号登录），支持 TCP 和 HTTP 协议，自动 HTTPS。</li>
-              <li><b>Frp</b> — 开源的高性能内网穿透工具，由 fatedier 开发，采用 Apache 2.0 开源协议。需要用户自行准备公网服务器作为服务端。</li>
-              <li><b>uTools</b> — 本工具基于 uTools 平台运行，利用其插件系统、本地数据库和系统 API 实现桌面端集成。</li>
+          <div className='about-card'>
+            <div className='about-card-title'><RefreshCw size={16} /> 更新日志</div>
+            <ul className='about-list'>
+              <li><b>v2.0.0</b> — 重构工作台入口，修正 Frp 端口测试语义，优化卡片视觉和运行状态表达。</li>
+              <li>增强 preload 安全边界：命令执行避免 shell 拼接、目录代理补充路径校验、Frp 日志脱敏。</li>
+              <li><b>v1.0.0</b> — 初始版本，支持 DevTunnel、Frp、目录代理和教程文档。</li>
             </ul>
           </div>
 
-          <div className="about-card">
-            <div className="about-card-title"><ClipboardList size={16} /> 适用场景</div>
-            <ul className="about-list">
-              <li><b>本地开发调试</b> — 将 localhost 服务暴露到公网，方便对接第三方 Webhook（如微信支付回调、GitHub Webhook 等）。</li>
-              <li><b>远程演示</b> — 在客户或团队面前展示本地开发中的项目，无需部署到服务器。</li>
-              <li><b>远程访问</b> — 在外出时访问家中或办公室的 NAS、路由器管理页面、远程桌面等服务。</li>
-              <li><b>IoT 设备调试</b> — 将内网中的 IoT 设备接口暴露出来，进行远程调试和数据采集。</li>
-              <li><b>临时文件共享</b> — 通过目录代理功能快速共享本地文件夹。</li>
+          <div className='about-card about-warning'>
+            <div className='about-card-title'><AlertTriangle size={16} /> 免责声明</div>
+            <ul className='about-list'>
+              <li>你需要自行遵守 DevTunnel、Frp、云服务器和网络服务提供方的使用条款。</li>
+              <li>因暴露本地服务、错误配置服务器或共享敏感内容造成的风险由使用者自行承担。</li>
+              <li>本插件不对第三方通道服务的稳定性、可用性和策略变更作保证。</li>
             </ul>
           </div>
 
-          <div className="about-card">
-            <div className="about-card-title"><RefreshCw size={16} /> 更新日志</div>
-            <ul className="about-list">
-              <li><b>v1.0.0</b> — 初始版本，支持 DevTunnel 免费内网穿透、Frp 自建穿透、目录代理、教程文档。</li>
-            </ul>
-          </div>
-
-          <div className="about-footer">
-            本工具基于 uTools 平台构建 · DevTunnel 由 Microsoft 提供 · Frp 由 fatedier 开发 · 如有问题或建议，欢迎反馈
+          <div className='about-footer'>
+            基于 uTools 平台构建 · DevTunnel 由 Microsoft 提供 · Frp 由 fatedier 开发
           </div>
         </div>
       </div>
