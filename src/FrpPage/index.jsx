@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { Server, Link2, Save, Square, Play, Pencil, Trash2, BookOpen, Download, ClipboardCopy, Globe, Menu } from 'lucide-react'
+import { Server, Link2, Save, Square, Play, Pencil, Trash2, BookOpen, Download, ClipboardCopy, Menu } from 'lucide-react'
 import ConfirmModal from '../ConfirmModal'
 import './index.css'
 
@@ -11,6 +11,11 @@ const PROXY_TYPES = [
 function formatTime (ts) {
   const d = new Date(ts)
   return d.toLocaleTimeString('zh-CN', { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0')
+}
+
+function parsePort (value) {
+  const num = Number(value)
+  return Number.isInteger(num) && num >= 1 && num <= 65535 ? num : null
 }
 
 export default function FrpPage ({ onToggleSidebar, showToast }) {
@@ -45,7 +50,8 @@ export default function FrpPage ({ onToggleSidebar, showToast }) {
       } catch (e) {}
       try {
         const status = window.services?.getFrpcStatus?.()
-        if (status) setFrpcStatus(status)
+        if (status?.running && status.source === 'frp') setFrpcStatus(status)
+        else setFrpcStatus({ running: false })
       } catch (e) {}
     }
     load()
@@ -54,15 +60,24 @@ export default function FrpPage ({ onToggleSidebar, showToast }) {
   // 加载 frpc 历史日志 + 监听事件
   useEffect(() => {
     const history = window.services?.getFrpcLogBuffer?.() || []
-    setLogs(history.map(h => ({ ...h, time: new Date(h.time) })))
+    setLogs(history
+      .filter(h => !h.source || h.source === 'frp')
+      .map(h => ({ ...h, time: new Date(h.time) })))
 
-    const onEntry = (e) => setLogs(prev => [...prev, { ...e.detail, time: new Date(e.detail.time) }])
+    const onEntry = (e) => {
+      if (e.detail?.source && e.detail.source !== 'frp') return
+      setLogs(prev => [...prev, { ...e.detail, time: new Date(e.detail.time) }])
+    }
     const onError = (e) => {
-      if (e.source && e.source !== 'frp') return
-      showToast('frpc 错误: ' + e.detail, 'error')
+      const detail = e.detail || {}
+      const source = detail.source || e.source
+      if (source && source !== 'frp') return
+      showToast('frpc 错误: ' + (detail.message || detail || '未知错误'), 'error')
     }
     const onExit = (e) => {
-      if (e.source && e.source !== 'frp') return
+      const detail = e.detail || {}
+      const source = detail.source || e.source
+      if (source && source !== 'frp') return
       setFrpcStatus({ running: false })
       showToast('frpc 已停止', 'info')
     }
@@ -93,18 +108,18 @@ export default function FrpPage ({ onToggleSidebar, showToast }) {
 
   const handleTestConnection = useCallback(async () => {
     if (!config.serverAddr) { showToast('请先填写服务器地址', 'error'); return }
-    const serverPort = parseInt(config.serverPort) || 7000
-    const logMsg = `测试连接 ${config.serverAddr}:${serverPort} ...`
+    const serverPort = parsePort(config.serverPort) || 7000
+    const logMsg = `测试端口连通 ${config.serverAddr}:${serverPort} ...`
     window.services?.addFrpcLog?.('system', logMsg, 'frp')
-    showToast('测试连接中...')
+    showToast('正在测试端口连通...')
     try {
-      const result = await window.services?.testFrpConnection?.(config.serverAddr, serverPort, config.token)
+      const result = await window.services?.testFrpConnection?.(config.serverAddr, serverPort)
       if (result?.success) {
-        window.services?.addFrpcLog?.('stdout', '连接成功', 'frp')
-        showToast('连接成功', 'success')
+        window.services?.addFrpcLog?.('stdout', '端口连通，Token 会在启动 frpc 时校验', 'frp')
+        showToast('端口连通，未校验 Token', 'success')
       } else {
-        window.services?.addFrpcLog?.('stderr', '连接失败: ' + (result?.message || '无法连接'), 'frp')
-        showToast('连接失败: ' + (result?.message || '无法连接'), 'error')
+        window.services?.addFrpcLog?.('stderr', '端口不通: ' + (result?.message || '无法连接'), 'frp')
+        showToast('端口不通: ' + (result?.message || '无法连接'), 'error')
       }
     } catch (e) {
       window.services?.addFrpcLog?.('error', '测试异常: ' + e.message, 'frp')
@@ -136,15 +151,17 @@ export default function FrpPage ({ onToggleSidebar, showToast }) {
   const handleSaveProxy = useCallback(async () => {
     setError('')
     if (!form.name) { setError('请输入代理名称'); return }
-    if (!form.localPort || parseInt(form.localPort) < 1) { setError('请输入有效本地端口'); return }
-    if (form.type === 'tcp' && (!form.remotePort || parseInt(form.remotePort) < 1)) { setError('TCP 类型需要输入远程端口'); return }
+    const localPort = parsePort(form.localPort)
+    const remotePort = form.type === 'tcp' ? parsePort(form.remotePort) : null
+    if (!localPort) { setError('请输入 1-65535 之间的本地端口'); return }
+    if (form.type === 'tcp' && !remotePort) { setError('TCP 类型需要输入 1-65535 之间的远程端口'); return }
     if (form.type === 'http' && !form.customDomain) { setError('HTTP 类型需要输入自定义域名'); return }
 
     const proxy = {
       name: form.name,
       type: form.type,
-      localPort: parseInt(form.localPort),
-      remotePort: form.type === 'tcp' ? parseInt(form.remotePort) : undefined,
+      localPort,
+      remotePort: form.type === 'tcp' ? remotePort : undefined,
       customDomain: form.type === 'http' ? form.customDomain : undefined
     }
 
@@ -196,7 +213,7 @@ export default function FrpPage ({ onToggleSidebar, showToast }) {
     try {
       const result = await window.services?.startFrpc?.(config, proxies, 'frp')
       if (result?.success) {
-        setFrpcStatus({ running: true })
+        setFrpcStatus({ running: true, pid: result.pid, source: result.source })
         window.services?.addFrpcLog?.('system', 'frpc 进程已启动 (pid: ' + result.pid + ')', 'frp')
       } else {
         window.services?.addFrpcLog?.('error', '启动失败: ' + (result?.message || ''), 'frp')
@@ -289,10 +306,11 @@ export default function FrpPage ({ onToggleSidebar, showToast }) {
             <div className='form-group' style={{ marginBottom: 0 }}>
               <label className='form-label'>认证 Token</label>
               <input className='form-input' type='password' value={config.token} onChange={(e) => setConfig(prev => ({ ...prev, token: e.target.value }))} placeholder='frps 配置的 token' />
+              <div className='form-hint'>按 frps 服务端配置填写；端口测试不会校验 Token，启动 frpc 后才会验证认证配置。</div>
             </div>
 
             <div className='frp-server-actions'>
-              <button className='btn btn-ghost btn-sm' onClick={handleTestConnection}><Link2 size={14} /> 测试连接</button>
+              <button className='btn btn-ghost btn-sm' onClick={handleTestConnection}><Link2 size={14} /> 测试端口</button>
               <button className='btn btn-brand btn-sm' onClick={handleSaveServer}><Save size={14} /> 保存配置</button>
             </div>
           </div>
@@ -302,49 +320,53 @@ export default function FrpPage ({ onToggleSidebar, showToast }) {
             <div className='frp-proxy-header'>
               <span className='card-title'>我的代理 ({proxies.length})</span>
               <div style={{ display: 'flex', gap: 6 }}>
-                {frpcStatus.running ? (
-                  <button className='btn btn-warning btn-sm' onClick={handleStopAll}><Square size={13} /> 全部停止</button>
-                ) : (
-                  <button className='btn btn-brand btn-sm' onClick={handleStartAll} disabled={proxies.length === 0}><Play size={13} /> 全部启动</button>
-                )}
+                {frpcStatus.running
+                  ? (
+                    <button className='btn btn-warning btn-sm' onClick={handleStopAll}><Square size={13} /> 停止连接</button>
+                    )
+                  : (
+                    <button className='btn btn-brand btn-sm' onClick={handleStartAll} disabled={proxies.length === 0}><Play size={13} /> 启动连接</button>
+                    )}
                 <button className='btn btn-ghost btn-sm' onClick={openCreateForm}>+ 新建代理</button>
               </div>
             </div>
 
-            {proxies.length === 0 ? (
-              <div className='empty' style={{ padding: '24px 0' }}>
-                <div className='empty-icon'><Link2 size={40} strokeWidth={1.2} /></div>
-                <div className='empty-text'>暂无代理规则</div>
-                <div className='empty-hint'>点击「新建代理」添加你的第一个 frp 代理</div>
-              </div>
-            ) : (
-              proxies.map((proxy, idx) => {
-                const proxyUrl = getProxyUrl(proxy)
-                return (
-                  <div key={idx} className='card frp-proxy-card' style={{ marginBottom: 8 }}>
-                    <div className='frp-proxy-top'>
-                      <span className='frp-proxy-name'>{proxy.name}</span>
-                      <span className='frp-proxy-type'>{proxy.type.toUpperCase()}</span>
-                    </div>
-                    <div className='frp-proxy-info'>
-                      本地 :{proxy.localPort}
-                      {proxy.type === 'tcp' && ` → 远程 :${proxy.remotePort}`}
-                      {proxy.type === 'http' && ` → ${proxy.customDomain}`}
-                    </div>
-                    {frpcStatus.running && proxyUrl && (
-                      <div className='frp-proxy-url' onClick={() => handleCopyUrl(proxyUrl)} title='点击复制'>
-                        <span className='frp-proxy-url-text'>{proxyUrl}</span>
-                        <span className='frp-proxy-url-hint'><ClipboardCopy size={12} /> 复制</span>
-                      </div>
-                    )}
-                    <div className='frp-proxy-actions'>
-                      <button className='btn btn-ghost btn-sm' onClick={() => openEditForm(idx)}><Pencil size={13} /> 编辑</button>
-                      <button className='btn btn-ghost btn-sm' onClick={() => handleDeleteProxy(idx)} style={{ color: 'var(--red)' }}><Trash2 size={13} /> 删除</button>
-                    </div>
-                  </div>
+            {proxies.length === 0
+              ? (
+                <div className='empty' style={{ padding: '24px 0' }}>
+                  <div className='empty-icon'><Link2 size={40} strokeWidth={1.2} /></div>
+                  <div className='empty-text'>暂无代理规则</div>
+                  <div className='empty-hint'>点击「新建代理」添加你的第一个 frp 代理</div>
+                </div>
                 )
-              })
-            )}
+              : (
+                  proxies.map((proxy, idx) => {
+                    const proxyUrl = getProxyUrl(proxy)
+                    return (
+                      <div key={idx} className='card frp-proxy-card' style={{ marginBottom: 8 }}>
+                        <div className='frp-proxy-top'>
+                          <span className='frp-proxy-name'>{proxy.name}</span>
+                          <span className='frp-proxy-type'>{proxy.type.toUpperCase()}</span>
+                        </div>
+                        <div className='frp-proxy-info'>
+                          本地 :{proxy.localPort}
+                          {proxy.type === 'tcp' && ` → 远程 :${proxy.remotePort}`}
+                          {proxy.type === 'http' && ` → ${proxy.customDomain}`}
+                        </div>
+                        {frpcStatus.running && proxyUrl && (
+                          <div className='frp-proxy-url' onClick={() => handleCopyUrl(proxyUrl)} title='点击复制'>
+                            <span className='frp-proxy-url-text'>{proxyUrl}</span>
+                            <span className='frp-proxy-url-hint'><ClipboardCopy size={12} /> 复制</span>
+                          </div>
+                        )}
+                        <div className='frp-proxy-actions'>
+                          <button className='btn btn-ghost btn-sm' onClick={() => openEditForm(idx)}><Pencil size={13} /> 编辑</button>
+                          <button className='btn btn-ghost btn-sm' onClick={() => handleDeleteProxy(idx)} style={{ color: 'var(--red)' }}><Trash2 size={13} /> 删除</button>
+                        </div>
+                      </div>
+                    )
+                  })
+                )}
           </div>
 
           {/* 使用引导 */}
@@ -354,12 +376,19 @@ export default function FrpPage ({ onToggleSidebar, showToast }) {
               <div className='frp-guide-text'>1. 在你的 VPS 上安装并启动 frps 服务端</div>
               <div className='frp-guide-text'>2. 填写上方的服务器地址和 Token</div>
               <div className='frp-guide-text'>3. 点击「新建代理」添加代理规则</div>
-              <div className='frp-guide-text'>4. 点击「全部启动」开始穿透</div>
+              <div className='frp-guide-text'>4. 点击「启动连接」，一个 frpc 进程会承载当前列表中的所有代理规则</div>
               <div className='frp-guide-text' style={{ marginTop: 8 }}>
-                <Download size={13} /> 需要 frpc？<a className='frp-guide-link' href='#' onClick={(e) => {
-                  e.preventDefault()
-                  try { window.utools.shellOpenExternal('https://github.com/fatedier/frp/releases') } catch (e) {}
-                }}>前往 GitHub 下载</a>
+                <Download size={13} /> 需要 frpc？
+                <a
+                  className='frp-guide-link'
+                  href='#'
+                  onClick={(e) => {
+                    e.preventDefault()
+                    try { window.utools.shellOpenExternal('https://github.com/fatedier/frp/releases') } catch (e) {}
+                  }}
+                >
+                  前往 GitHub 下载
+                </a>
               </div>
             </div>
           )}
@@ -378,16 +407,18 @@ export default function FrpPage ({ onToggleSidebar, showToast }) {
               </div>
             </div>
             <div className='log-content' style={{ maxHeight: 'calc(100vh - 180px)' }}>
-              {logs.length === 0 ? (
-                <div className='log-empty'>暂无日志</div>
-              ) : (
-                logs.map((log, i) => (
-                  <div key={i} className={`log-line log-${log.type}`}>
-                    <span className='log-time'>{formatTime(log.time)}</span>
-                    <span className='log-text'>{log.text}</span>
-                  </div>
-                ))
-              )}
+              {logs.length === 0
+                ? (
+                  <div className='log-empty'>暂无日志</div>
+                  )
+                : (
+                    logs.map((log, i) => (
+                      <div key={i} className={`log-line log-${log.type}`}>
+                        <span className='log-time'>{formatTime(log.time)}</span>
+                        <span className='log-text'>{log.text}</span>
+                      </div>
+                    ))
+                  )}
               <div ref={logEndRef} />
             </div>
           </div>

@@ -2,6 +2,11 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { ClipboardCopy, Play, Square, FolderOpen } from 'lucide-react'
 import './index.css'
 
+function parsePort (value) {
+  const num = Number(value)
+  return Number.isInteger(num) && num >= 1 && num <= 65535 ? num : null
+}
+
 export default function TunnelDetail ({ tunnel: initialTunnel, onBack, showToast }) {
   const [tunnel, setTunnel] = useState(initialTunnel)
   const [editing, setEditing] = useState(false)
@@ -92,7 +97,12 @@ export default function TunnelDetail ({ tunnel: initialTunnel, onBack, showToast
       })
 
       // 更新端口（端口或协议变化都需要更新）
-      const newPort = port ? parseInt(port) : null
+      const newPort = port ? parsePort(port) : null
+      if (port && !newPort) {
+        showToast('端口号必须是 1-65535 之间的整数', 'error')
+        setSaving(false)
+        return
+      }
       const oldProtocol = current?.ports?.[0]?.protocol || 'auto'
       if (newPort && (newPort !== oldPort || protocol !== oldProtocol)) {
         if (oldPort) {
@@ -126,35 +136,43 @@ export default function TunnelDetail ({ tunnel: initialTunnel, onBack, showToast
   }, [tunnelUrl, showToast])
 
   const handleStart = useCallback(async () => {
+    let latestTunnel = tunnel
     let portNum = tunnel.ports?.[0]?.portNumber
-    if (!portNum) {
-      try {
-        const full = await window.services.getTunnelWithPorts(tunnelId)
-        portNum = full?.ports?.[0]?.portNumber
-      } catch (err) {}
-    }
+    try {
+      const full = await window.services.getTunnelWithPorts(tunnelId)
+      if (full) {
+        latestTunnel = full
+        portNum = full.ports?.[0]?.portNumber || portNum
+        setTunnel(full)
+      }
+    } catch (err) {}
     if (!portNum) { showToast('请先配置端口', 'error'); return }
 
+    const latestDescription = latestTunnel.description || ''
+    const latestDirProxyPath = latestDescription.startsWith('代理目录: ')
+      ? latestDescription.replace('代理目录: ', '')
+      : ''
+
     // 代理目录隧道：先启动本地文件服务器
-    if (dirProxyPath) {
-      const fsResult = await window.services.startFileServer(dirProxyPath, portNum)
+    if (latestDirProxyPath) {
+      const fsResult = await window.services.startFileServer(latestDirProxyPath, portNum)
       if (!fsResult.success) {
         showToast('文件服务器启动失败: ' + fsResult.message, 'error')
         return
       }
     }
 
-    const result = window.services.startHost(tunnelId, portNum, true)
+    const result = window.services.startHost(tunnelId, portNum, latestTunnel.anonymous === true)
     if (result.success) {
       setRunning(true)
       window.__runningTunnelId = tunnelId
       showToast('启动中...')
     } else {
       // 启动失败时回滚文件服务器
-      if (dirProxyPath) window.services.stopFileServer()
+      if (latestDirProxyPath) window.services.stopFileServer()
       showToast('启动失败: ' + result.message, 'error')
     }
-  }, [tunnelId, tunnel, dirProxyPath, showToast])
+  }, [tunnelId, tunnel, showToast])
 
   const handleStop = useCallback(() => {
     // 代理目录隧道：同时停止文件服务器
@@ -177,7 +195,7 @@ export default function TunnelDetail ({ tunnel: initialTunnel, onBack, showToast
         <div className='topbar-left'>
           <button className='back-btn' onClick={onBack} title='返回'>
             <svg width='16' height='16' viewBox='0 0 16 16' fill='none'>
-              <path d='M10 12L6 8L10 4' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'/>
+              <path d='M10 12L6 8L10 4' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round' />
             </svg>
           </button>
           <span className='topbar-title'>
@@ -187,27 +205,31 @@ export default function TunnelDetail ({ tunnel: initialTunnel, onBack, showToast
           {loading && <span className='spinner' />}
         </div>
         <div className='topbar-right'>
-          {editing ? (
-            <>
-              <button className='btn btn-ghost btn-sm' onClick={() => setEditing(false)}>取消</button>
-              <button className='btn btn-brand btn-sm' onClick={handleSave} disabled={saving}>
-                {saving ? '保存中...' : '保存'}
-              </button>
-            </>
-          ) : (
-            <>
-              {running ? (
-                <button className='btn btn-warning btn-sm' onClick={handleStop}>
-                  <Square size={13} /> 停止
+          {editing
+            ? (
+              <>
+                <button className='btn btn-ghost btn-sm' onClick={() => setEditing(false)}>取消</button>
+                <button className='btn btn-brand btn-sm' onClick={handleSave} disabled={saving}>
+                  {saving ? '保存中...' : '保存'}
                 </button>
-              ) : (
-                <button className='btn btn-brand btn-sm' onClick={handleStart}>
-                  <Play size={13} /> 启动
-                </button>
+              </>
+              )
+            : (
+              <>
+                {running
+                  ? (
+                    <button className='btn btn-warning btn-sm' onClick={handleStop}>
+                      <Square size={13} /> 停止
+                    </button>
+                    )
+                  : (
+                    <button className='btn btn-brand btn-sm' onClick={handleStart}>
+                      <Play size={13} /> 启动
+                    </button>
+                    )}
+                <button className='btn btn-ghost btn-sm' onClick={() => setEditing(true)}>编辑</button>
+              </>
               )}
-              <button className='btn btn-ghost btn-sm' onClick={() => setEditing(true)}>编辑</button>
-            </>
-          )}
         </div>
       </div>
 
@@ -226,47 +248,51 @@ export default function TunnelDetail ({ tunnel: initialTunnel, onBack, showToast
               </div>
             )}
 
-            {editing ? (
-              <>
-                <div className='info-item'>
-                  <span className='info-label'>端口号</span>
-                  <input className='form-input' type='number' value={port} onChange={(e) => setPort(e.target.value)} placeholder='80、3000、8080...' min='1' max='65535' />
-                </div>
-                <div className='info-item'>
-                  <span className='info-label'>协议</span>
-                  <select className='form-select' value={protocol} onChange={(e) => setProtocol(e.target.value)}>
-                    <option value='auto'>自动 (auto)</option>
-                    <option value='http'>HTTP</option>
-                    <option value='https'>HTTPS</option>
-                  </select>
-                </div>
-                <div className='info-item'>
-                  <span className='info-label'>描述</span>
-                  <input className='form-input' type='text' value={description} onChange={(e) => setDescription(e.target.value)} placeholder='隧道用途说明' />
-                </div>
-              </>
-            ) : (
-              <>
-                <div className='info-item'>
-                  <span className='info-label'>端口</span>
-                  <span className='info-val'>{tunnel.ports?.map(p => `${p.portNumber} (${p.protocol})`).join(', ') || '未配置'}</span>
-                </div>
-                {tunnel.description && (
+            {editing
+              ? (
+                <>
+                  <div className='info-item'>
+                    <span className='info-label'>端口号</span>
+                    <input className='form-input' type='number' value={port} onChange={(e) => setPort(e.target.value)} placeholder='80、3000、8080...' min='1' max='65535' />
+                  </div>
+                  <div className='info-item'>
+                    <span className='info-label'>协议</span>
+                    <select className='form-select' value={protocol} onChange={(e) => setProtocol(e.target.value)}>
+                      <option value='auto'>自动 (auto)</option>
+                      <option value='http'>HTTP</option>
+                      <option value='https'>HTTPS</option>
+                    </select>
+                  </div>
                   <div className='info-item'>
                     <span className='info-label'>描述</span>
-                    <span className='info-val'>{tunnel.description}</span>
+                    <input className='form-input' type='text' value={description} onChange={(e) => setDescription(e.target.value)} placeholder='隧道用途说明' />
                   </div>
-                )}
-                <div className='info-item'>
-                  <span className='info-label'>访问 URL</span>
-                  {tunnelUrl ? (
-                    <span className='info-val url' onClick={handleCopyUrl} title='点击复制'>{tunnelUrl} <ClipboardCopy size={13} /></span>
-                  ) : (
-                    <span className='info-val' style={{ color: 'var(--text-muted)' }}>启动后获取</span>
+                </>
+                )
+              : (
+                <>
+                  <div className='info-item'>
+                    <span className='info-label'>端口</span>
+                    <span className='info-val'>{tunnel.ports?.map(p => `${p.portNumber} (${p.protocol})`).join(', ') || '未配置'}</span>
+                  </div>
+                  {tunnel.description && (
+                    <div className='info-item'>
+                      <span className='info-label'>描述</span>
+                      <span className='info-val'>{tunnel.description}</span>
+                    </div>
                   )}
-                </div>
-              </>
-            )}
+                  <div className='info-item'>
+                    <span className='info-label'>访问 URL</span>
+                    {tunnelUrl
+                      ? (
+                        <span className='info-val url' onClick={handleCopyUrl} title='点击复制'>{tunnelUrl} <ClipboardCopy size={13} /></span>
+                        )
+                      : (
+                        <span className='info-val' style={{ color: 'var(--text-muted)' }}>启动后获取</span>
+                        )}
+                  </div>
+                </>
+                )}
           </div>
         </div>
 
@@ -275,25 +301,30 @@ export default function TunnelDetail ({ tunnel: initialTunnel, onBack, showToast
           <div className='log-header'>
             <span>运行日志 ({logs.length})</span>
             <div style={{ display: 'flex', gap: 6 }}>
-              <button className='btn btn-ghost btn-sm' onClick={() => {
-                const text = logs.map(l => `[${formatTime(l.time)}] [${l.type}] ${l.text}`).join('\n')
-                window.utools?.copyText(text)
-                showToast('日志已复制', 'success')
-              }}>复制</button>
+              <button
+                className='btn btn-ghost btn-sm' onClick={() => {
+                  const text = logs.map(l => `[${formatTime(l.time)}] [${l.type}] ${l.text}`).join('\n')
+                  window.utools?.copyText(text)
+                  showToast('日志已复制', 'success')
+                }}
+              >复制
+              </button>
               <button className='btn btn-ghost btn-sm' onClick={() => { window.services?.clearLogs(); setLogs([]) }}>清空</button>
             </div>
           </div>
           <div className='log-content'>
-            {logs.length === 0 ? (
-              <div className='log-empty'>暂无日志</div>
-            ) : (
-              logs.map((log, i) => (
-                <div key={i} className={`log-line log-${log.type}`}>
-                  <span className='log-time'>{formatTime(log.time)}</span>
-                  <span className='log-text'>{log.text}</span>
-                </div>
-              ))
-            )}
+            {logs.length === 0
+              ? (
+                <div className='log-empty'>暂无日志</div>
+                )
+              : (
+                  logs.map((log, i) => (
+                    <div key={i} className={`log-line log-${log.type}`}>
+                      <span className='log-time'>{formatTime(log.time)}</span>
+                      <span className='log-text'>{log.text}</span>
+                    </div>
+                  ))
+                )}
             <div ref={logEndRef} />
           </div>
         </div>
