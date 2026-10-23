@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Menu } from 'lucide-react'
 import ConfirmModal from '../ConfirmModal'
+import FrpServerSettings from './FrpServerSettings'
 import './index.css'
 
 export default function Settings ({ onToggleSidebar, showToast }) {
@@ -13,13 +14,50 @@ export default function Settings ({ onToggleSidebar, showToast }) {
   const [validatingFrpc, setValidatingFrpc] = useState(false)
 
   const [confirmProps, setConfirmProps] = useState(null)
+  const [saveStatus, setSaveStatus] = useState('输入框失焦时自动保存，选项修改后立即保存')
+  const [saveErrors, setSaveErrors] = useState({})
+  const [resetKey, setResetKey] = useState(0)
+  const savedConfig = useRef({})
+  const savedFrpcPath = useRef('')
 
   useEffect(() => {
     const c = window.services?.getConfig()
-    if (c) setConfig(c)
+    if (c) { setConfig(c); savedConfig.current = c }
     const fp = window.services?.getFrpcPath?.()
-    if (fp) setFrpcPath(fp)
+    if (fp) { setFrpcPath(fp); savedFrpcPath.current = fp }
   }, [])
+
+  const saveSetting = useCallback((key, value) => {
+    if (savedConfig.current[key] === value) {
+      setSaveErrors(prev => ({ ...prev, [key]: '' }))
+      return
+    }
+    const result = window.services.saveConfig({ [key]: value })
+    if (!result?.success) {
+      setSaveErrors(prev => ({ ...prev, [key]: '未保存：' + (result?.message || '保存失败') }))
+      showToast(result?.message || '保存失败', 'error')
+      return
+    }
+    savedConfig.current = { ...savedConfig.current, [key]: value }
+    setSaveErrors(prev => ({ ...prev, [key]: '' }))
+    setSaveStatus('已保存')
+  }, [showToast])
+
+  const saveFrpc = useCallback(value => {
+    if (savedFrpcPath.current === value) {
+      setSaveErrors(prev => ({ ...prev, frpcPath: '' }))
+      return
+    }
+    const result = window.services.saveFrpcPath(value)
+    if (!result?.success) {
+      setSaveErrors(prev => ({ ...prev, frpcPath: '未保存：' + (result?.message || '保存失败') }))
+      showToast(result?.message || '保存失败', 'error')
+      return
+    }
+    savedFrpcPath.current = value
+    setSaveErrors(prev => ({ ...prev, frpcPath: '' }))
+    setSaveStatus('已保存')
+  }, [showToast])
 
   // devtunnel 路径
   const validatePath = useCallback(async () => {
@@ -35,8 +73,9 @@ export default function Settings ({ onToggleSidebar, showToast }) {
     if (file) {
       setConfig(prev => ({ ...prev, path: file }))
       setPathStatus(null)
+      saveSetting('path', file)
     }
-  }, [])
+  }, [saveSetting])
 
   // frpc 路径
   const validateFrpcPath = useCallback(async () => {
@@ -52,21 +91,9 @@ export default function Settings ({ onToggleSidebar, showToast }) {
     if (file) {
       setFrpcPath(file)
       setFrpcPathStatus(null)
+      saveFrpc(file)
     }
-  }, [])
-
-  const handleSave = useCallback(() => {
-    if (pathStatus && !pathStatus.valid) { showToast('devtunnel 路径无效', 'error'); return }
-    // 保存 devtunnel 配置
-    const res = window.services.saveConfig(config)
-    if (!res.success) { showToast('保存失败: ' + res.message, 'error'); return }
-    // 保存 frpc 路径
-    if (frpcPath) {
-      const frpcRes = window.services.saveFrpcPath(frpcPath)
-      if (!frpcRes.success) { showToast('frpc 路径保存失败: ' + frpcRes.message, 'error'); return }
-    }
-    showToast('配置已保存', 'success')
-  }, [config, pathStatus, frpcPath, showToast])
+  }, [saveFrpc])
 
   const handleClearData = useCallback(() => {
     setConfirmProps({
@@ -86,6 +113,11 @@ export default function Settings ({ onToggleSidebar, showToast }) {
         else setFrpcPath('')
         setPathStatus(null)
         setFrpcPathStatus(null)
+        savedConfig.current = freshConfig || {}
+        savedFrpcPath.current = freshFrpcPath || ''
+        setResetKey(prev => prev + 1)
+        setSaveStatus('数据已清除')
+        setSaveErrors({})
         showToast('所有数据已清除', 'success')
       },
       onCancel: () => setConfirmProps(null)
@@ -104,6 +136,8 @@ export default function Settings ({ onToggleSidebar, showToast }) {
       </div>
 
       <div className='page'>
+        <div className='settings-save-status' role='status'>{Object.values(saveErrors).some(Boolean) ? Object.values(saveErrors).filter(Boolean).join('；') : saveStatus}</div>
+        <div className='form-hint settings-sync-hint'>默认值、FRP 服务器和代理规则通过 uTools 同步；请在两台电脑登录同一账号并开启数据同步。可执行文件和目录路径按设备分别保存，换电脑需配置本机路径。</div>
         <div className='card'>
           <div className='card-header'>
             <span className='card-title'>devtunnel 可执行文件</span>
@@ -114,10 +148,12 @@ export default function Settings ({ onToggleSidebar, showToast }) {
               type='text'
               value={config.path}
               onChange={(e) => { setConfig(prev => ({ ...prev, path: e.target.value })); setPathStatus(null) }}
+              onBlur={e => saveSetting('path', e.target.value.trim())}
               placeholder='C:\path\to\devtunnel.exe'
             />
             <button className='btn btn-ghost' onClick={handleSelectFile}>浏览</button>
           </div>
+          <div className='form-hint'>本机路径，其他电脑可单独设置；留空恢复自动检测。</div>
           <div className='path-actions'>
             <button className='btn btn-ghost btn-sm' onClick={validatePath} disabled={validating}>
               {validating ? <><span className='spinner' /> 验证中</> : '验证路径'}
@@ -137,11 +173,12 @@ export default function Settings ({ onToggleSidebar, showToast }) {
               type='text'
               value={frpcPath}
               onChange={(e) => { setFrpcPath(e.target.value); setFrpcPathStatus(null) }}
+              onBlur={e => saveFrpc(e.target.value.trim())}
               placeholder='/path/to/frpc 或 frpc.exe'
             />
             <button className='btn btn-ghost' onClick={handleSelectFrpcFile}>浏览</button>
           </div>
-          <div className='form-hint'>自动检测 devtunnel 同目录下的 frpc</div>
+          <div className='form-hint'>本机路径，留空自动检测 devtunnel 同目录下的 frpc。</div>
           <div className='path-actions'>
             <button className='btn btn-ghost btn-sm' onClick={validateFrpcPath} disabled={validatingFrpc}>
               {validatingFrpc ? <><span className='spinner' /> 验证中</> : '验证路径'}
@@ -157,23 +194,23 @@ export default function Settings ({ onToggleSidebar, showToast }) {
           </div>
           <div className='form-group'>
             <label className='form-label'>默认端口</label>
-            <input className='form-input' type='number' value={config.defaultPort} onChange={(e) => setConfig(prev => ({ ...prev, defaultPort: e.target.value }))} min='1' max='65535' />
+            <input className='form-input' type='number' value={config.defaultPort} onChange={(e) => setConfig(prev => ({ ...prev, defaultPort: e.target.value }))} onBlur={e => saveSetting('defaultPort', e.target.value)} min='1' max='65535' />
           </div>
           <div className='form-group'>
             <label className='form-label'>默认协议</label>
-            <select className='form-select' value={config.defaultProtocol} onChange={(e) => setConfig(prev => ({ ...prev, defaultProtocol: e.target.value }))}>
+            <select className='form-select' value={config.defaultProtocol} onChange={(e) => { setConfig(prev => ({ ...prev, defaultProtocol: e.target.value })); saveSetting('defaultProtocol', e.target.value) }}>
               <option value='auto'>自动 (auto)</option>
               <option value='http'>HTTP</option>
               <option value='https'>HTTPS</option>
             </select>
           </div>
           <label className='form-checkbox'>
-            <input type='checkbox' checked={config.defaultAnonymous} onChange={(e) => setConfig(prev => ({ ...prev, defaultAnonymous: e.target.checked }))} />
+            <input type='checkbox' checked={config.defaultAnonymous} onChange={(e) => { setConfig(prev => ({ ...prev, defaultAnonymous: e.target.checked })); saveSetting('defaultAnonymous', e.target.checked) }} />
             默认允许匿名访问
           </label>
         </div>
 
-        <button className='btn btn-brand btn-block' onClick={handleSave}>保存配置</button>
+        <FrpServerSettings key={resetKey} showToast={showToast} />
 
         <div className='divider' style={{ margin: '24px 0' }} />
 

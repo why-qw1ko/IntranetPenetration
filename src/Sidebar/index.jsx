@@ -3,8 +3,8 @@ import './index.css'
 
 const MENU = [
   { key: 'devtunnel', icon: Radio, label: '免费内网穿透' },
-  { key: 'frp', icon: Link2, label: 'Frp 内网穿透' },
   { key: 'proxydir', icon: FolderOpen, label: '代理目录' },
+  { key: 'frp', icon: Link2, label: 'Frp 内网穿透' },
   { key: 'settings', icon: Settings, label: '设置' },
   { key: 'tutorial', icon: BookOpen, label: '教程文档' },
   { key: 'about', icon: Info, label: '关于本项目' }

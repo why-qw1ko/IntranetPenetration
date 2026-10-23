@@ -4,6 +4,8 @@ const url = require('url')
 const path = require('path')
 const fs = require('fs')
 const os = require('os')
+const { getLocal, setLocal, removeLocal, putDocument } = require('./storage')(window.utools)
+const { isPort, validateServer, validateProxies, generateFrpcConfig, createFrpcController } = require('./frp')
 
 // TextDecoder 替代 iconv-lite，无需第三方依赖
 let gbkDecoder = null
@@ -11,29 +13,14 @@ try { gbkDecoder = new TextDecoder('gbk') } catch (e) {}
 
 const DEFAULT_DEVTUNNEL_PATH = path.join(os.homedir(), 'devtunnel', 'devtunnel.exe')
 
-// ==================== 本地存储辅助（不同步到云端） ====================
-
-function getLocal (key, defaultValue) {
-  try {
-    const val = window.utools.dbStorage.getItem(key)
-    return val !== null && val !== undefined ? val : defaultValue
-  } catch (e) { return defaultValue }
-}
-
-function setLocal (key, value) {
-  try { window.utools.dbStorage.setItem(key, value) } catch (e) {}
-}
-
-function removeLocal (key) {
-  try { window.utools.dbStorage.removeItem(key) } catch (e) {}
-}
+// ==================== 旧版数据迁移 ====================
 
 // 从云同步 db 迁移数据到本地存储（一次性）
 function migrateIfNeeded () {
   // 迁移 devtunnel-config.path
   try {
     const doc = window.utools.db.get('devtunnel-config')
-    if (doc && doc.path) {
+    if (doc && doc.path && !getLocal('devtunnel-path', '') && fs.existsSync(doc.path)) {
       setLocal('devtunnel-path', doc.path)
       delete doc.path
       window.utools.db.put(doc)
@@ -43,7 +30,7 @@ function migrateIfNeeded () {
   // 迁移 frp-config.frpcPath
   try {
     const doc = window.utools.db.get('frp-config')
-    if (doc && doc.frpcPath) {
+    if (doc && doc.frpcPath && !getLocal('frpc-path', '') && fs.existsSync(doc.frpcPath)) {
       setLocal('frpc-path', doc.frpcPath)
       delete doc.frpcPath
       try { window.utools.db.put(doc) } catch (e2) {}
@@ -85,6 +72,7 @@ function migrateIfNeeded () {
         const localDoc = { ...doc }
         delete localDoc._id
         delete localDoc._rev
+        if (localDoc.dirPath && !fs.existsSync(localDoc.dirPath)) localDoc.dirPath = ''
         setLocal(key, localDoc)
         window.utools.db.remove(doc)
       }
@@ -95,15 +83,19 @@ function migrateIfNeeded () {
 let hostProcess = null
 let hostPid = null
 let logBuffer = []
-let configCache = null
 let fileServer = null
 let fileServerPort = null
 let fileServerDir = null
-let frpcProcess = null
-let frpcPid = null
-let frpcSource = '' // 记录是谁启动的 frpc ('frp' | 'proxydir')
-let frpcStopping = false // 标记是否是主动停止
 let frpcLogBuffer = []
+const frpcController = createFrpcController({
+  getFrpcPath: () => window.services.getFrpcPath(),
+  addFrpcLog,
+  emitEvent: (name, detail, source) => {
+    const event = new CustomEvent(name, { detail })
+    event.source = source
+    window.dispatchEvent(event)
+  }
+})
 
 // ==================== 初始化 ====================
 
@@ -141,10 +133,9 @@ function saveFrpcLogs () {
   }, 1000)
 }
 
-// 获取配置（带缓存）
+// 每次读取同步配置，避免另一台设备的更新被内存缓存遮蔽
 // path 从本地存储读取（本机特有），default* 从云同步 db 读取
 function getConfig () {
-  if (configCache) return configCache
   const localPath = getLocal('devtunnel-path', '')
   let defaults = { defaultPort: '80', defaultProtocol: 'auto', defaultAnonymous: true }
   try {
@@ -157,11 +148,10 @@ function getConfig () {
       }
     }
   } catch (e) {}
-  configCache = {
+  return {
     path: localPath || DEFAULT_DEVTUNNEL_PATH,
     ...defaults
   }
-  return configCache
 }
 
 function getDevTunnelPath () {
@@ -206,13 +196,15 @@ function addLog (type, text) {
 
 // frpc 专用日志（独立缓冲，不进入 devtunnel 缓冲）
 function addFrpcLog (type, text, source) {
-  const entry = { type, text, time: Date.now() }
+  const entry = { type, text, source, time: Date.now() }
   frpcLogBuffer.push(entry)
   if (frpcLogBuffer.length > 500) frpcLogBuffer.shift()
   window.dispatchEvent(new CustomEvent('frpc-log-entry', { detail: entry }))
   // 兼容：同时派发 frpc-log 事件（带 source），供 ProxyDir 过滤
   if (source) {
-    window.dispatchEvent(new CustomEvent('frpc-log', { detail: text, source }))
+    const event = new CustomEvent('frpc-log', { detail: text })
+    event.source = source
+    window.dispatchEvent(event)
   }
   saveFrpcLogs()
 }
@@ -238,21 +230,14 @@ window.services = {
 
   saveConfig (config) {
     try {
-      configCache = null // 清除缓存
-      // path 保存到本地存储（本机特有）
-      if (config.path !== undefined) {
-        setLocal('devtunnel-path', config.path)
+      if (config.defaultPort !== undefined && !isPort(config.defaultPort)) throw new Error('默认端口必须是 1–65535 的整数')
+      if (config.defaultProtocol !== undefined && !['auto', 'http', 'https'].includes(config.defaultProtocol)) throw new Error('默认协议无效')
+      const defaults = {}
+      for (const key of ['defaultPort', 'defaultProtocol', 'defaultAnonymous']) {
+        if (config[key] !== undefined) defaults[key] = config[key]
       }
-      // default* 保存到云同步 db（可跨设备）
-      const cloudDoc = { _id: 'devtunnel-config' }
-      try {
-        const existing = window.utools.db.get('devtunnel-config')
-        cloudDoc._rev = existing._rev
-      } catch (e) {}
-      cloudDoc.defaultPort = config.defaultPort
-      cloudDoc.defaultProtocol = config.defaultProtocol
-      cloudDoc.defaultAnonymous = config.defaultAnonymous
-      window.utools.db.put(cloudDoc)
+      if (Object.keys(defaults).length) putDocument('devtunnel-config', defaults)
+      if (config.path !== undefined) setLocal('devtunnel-path', config.path.trim())
       return { success: true }
     } catch (e) {
       return { success: false, message: e.message }
@@ -747,7 +732,6 @@ window.services = {
     }
     logBuffer = []
     frpcLogBuffer = []
-    configCache = null
   },
 
   // ==================== 工具 ====================
@@ -1002,17 +986,21 @@ window.services = {
 
   async saveFrpConfig (config) {
     try {
-      const doc = { _id: 'frp-config', server: config.server, proxies: config.proxies }
-      try {
-        const existing = window.utools.db.get('frp-config')
-        if (existing) doc._rev = existing._rev
-      } catch (e) {}
-      window.utools.db.put(doc)
+      const fields = {}
+      const existing = window.utools.db.get('frp-config')
+      const server = { serverAddr: '', serverPort: '7000', token: '', ...existing?.server, ...config.server }
+      const error = validateServer(server, false) || (config.proxies !== undefined && validateProxies(config.proxies, server))
+      if (error) throw new Error(error)
+      if (config.server) fields.server = { ...server, serverAddr: server.serverAddr.trim(), serverPort: String(server.serverPort) }
+      if (config.proxies !== undefined) fields.proxies = config.proxies
+      putDocument('frp-config', fields)
       return { success: true }
     } catch (e) {
       return { success: false, message: e.message }
     }
   },
+
+  validateFrpProxies (proxies, server) { return validateProxies(proxies, server) },
 
   getFrpcPath () {
     // 从本地存储读取（本机特有）
@@ -1066,126 +1054,12 @@ window.services = {
     }
   },
 
-  generateFrpcConfig (serverConfig, proxies) {
-    let toml = `serverAddr = "${serverConfig.serverAddr}"\n`
-    toml += `serverPort = ${serverConfig.serverPort || 7000}\n`
-    if (serverConfig.token) toml += `auth.token = "${serverConfig.token}"\n`
-    toml += `\n`
+  generateFrpcConfig,
+  ...frpcController,
 
-    for (const p of proxies) {
-      toml += `[[proxies]]\n`
-      toml += `name = "${p.name}"\n`
-      toml += `type = "${p.type}"\n`
-      toml += `localPort = ${p.localPort}\n`
-      if (p.type === 'tcp' && p.remotePort) toml += `remotePort = ${p.remotePort}\n`
-      if (p.type === 'http' && p.customDomain) toml += `customDomains = ["${p.customDomain}"]\n`
-      toml += `\n`
-    }
-    return toml
-  },
-
-  startFrpc (serverConfig, proxies, source) {
-    if (frpcProcess) return { success: false, message: 'frpc 已在运行中' }
-    frpcSource = source || 'frp'
-
-    const frpcPath = this.getFrpcPath()
-    if (!fs.existsSync(frpcPath)) {
-      return { success: false, message: 'frpc 未找到: ' + frpcPath + '\n请在「设置」页面配置 frpc 路径' }
-    }
-
-    // 生成临时配置文件
-    const configContent = this.generateFrpcConfig(serverConfig, proxies)
-    const configPath = path.join(require('os').tmpdir(), 'frpc-tunnel-plugin.toml')
-    try {
-      fs.writeFileSync(configPath, configContent, 'utf-8')
-    } catch (e) {
-      return { success: false, message: '写入配置文件失败: ' + e.message }
-    }
-
-    addFrpcLog('system', '配置文件: ' + configPath)
-    addFrpcLog('system', '配置内容:\n' + configContent)
-
-    const args = ['-c', configPath]
-    addFrpcLog('system', '启动命令: frpc ' + args.join(' '))
-
-    addFrpcLog('system', '可执行文件: ' + frpcPath)
-
-    try {
-      frpcProcess = spawn(frpcPath, args, { windowsHide: true })
-      frpcPid = frpcProcess.pid
-      const startTime = Date.now()
-      let stderrBuf = ''
-      let errorFired = false
-
-      frpcProcess.stdout.on('data', (data) => {
-        const text = data.toString().trim()
-        if (text) addFrpcLog('stdout', text, frpcSource)
-      })
-
-      frpcProcess.stderr.on('data', (data) => {
-        const text = data.toString().trim()
-        if (text) {
-          stderrBuf += text + '\n'
-          addFrpcLog('stderr', text, frpcSource)
-        }
-      })
-
-      frpcProcess.on('close', (code) => {
-        const errMsg = stderrBuf.trim()
-
-        // 主动停止时不显示错误
-        if (code !== 0 && !errorFired && !frpcStopping) {
-          const detail = errMsg || ('frpc 退出码: ' + code)
-          addFrpcLog('error', detail, frpcSource)
-          window.dispatchEvent(new CustomEvent('frpc-error', { detail, source: frpcSource }))
-        }
-
-        frpcStopping = false // 重置标志
-        addFrpcLog('system', 'frpc 进程退出 (code: ' + code + ')', frpcSource)
-        window.dispatchEvent(new CustomEvent('frpc-exit', { detail: code, source: frpcSource }))
-        frpcProcess = null
-        frpcPid = null
-        try { fs.unlinkSync(configPath) } catch (e) {}
-      })
-
-      frpcProcess.on('error', (err) => {
-        errorFired = true
-        addFrpcLog('error', err.message, frpcSource)
-        window.dispatchEvent(new CustomEvent('frpc-error', { detail: err.message, source: frpcSource }))
-        window.dispatchEvent(new CustomEvent('frpc-exit', { detail: -1, source: frpcSource }))
-        frpcProcess = null
-        frpcPid = null
-        try { fs.unlinkSync(configPath) } catch (e) {}
-      })
-
-      return { success: true, pid: frpcPid }
-    } catch (e) {
-      frpcProcess = null
-      frpcPid = null
-      return { success: false, message: e.message }
-    }
-  },
-
-  stopFrpc () {
-    if (!frpcProcess) return { success: false, message: 'frpc 未在运行' }
-    try {
-      frpcStopping = true // 标记主动停止
-      spawn('taskkill', ['/pid', String(frpcPid), '/T', '/F'], { windowsHide: true })
-      addFrpcLog('system', '正在停止 frpc...')
-      frpcProcess = null
-      frpcPid = null
-      return { success: true }
-    } catch (e) {
-      frpcStopping = false
-      return { success: false, message: e.message }
-    }
-  },
-
-  getFrpcStatus () {
-    return { running: frpcProcess !== null, pid: frpcPid }
-  },
-
-  async testFrpConnection (serverAddr, serverPort, token) {
+  async testFrpConnection (serverAddr, serverPort) {
+    const error = validateServer({ serverAddr, serverPort })
+    if (error) return { success: false, message: error }
     // 简单的 TCP 连通性测试
     const net = require('net')
     return new Promise((resolve) => {
