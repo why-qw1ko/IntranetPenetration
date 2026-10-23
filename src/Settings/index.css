@@ -3,6 +3,23 @@
   gap: 8px;
 }
 
+.settings-save-status {
+  color: var(--text-sub);
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.settings-field-error {
+  color: var(--red);
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+.settings-sync-hint {
+  margin-bottom: 16px;
+  line-height: 1.7;
+}
+
 .path-input {
   flex: 1;
   min-width: 0;

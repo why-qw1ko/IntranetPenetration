@@ -112,6 +112,7 @@ export default function App () {
       }
     })
     window.utools.onPluginOut(() => {
+      document.activeElement?.blur?.()
       setView('')
     })
   }, [loadLoginStatus, loadTunnels])
@@ -186,12 +187,12 @@ export default function App () {
 
         {/* frp section */}
         {section === 'frp' && (
-          <FrpPage onToggleSidebar={toggleSidebar} showToast={showToast} />
+          <FrpPage onToggleSidebar={toggleSidebar} onOpenSettings={() => handleSectionSelect('settings')} showToast={showToast} />
         )}
 
         {/* proxydir section */}
         {section === 'proxydir' && (
-          <ProxyDir onToggleSidebar={toggleSidebar} showToast={showToast} />
+          <ProxyDir onToggleSidebar={toggleSidebar} onOpenSettings={() => handleSectionSelect('settings')} showToast={showToast} />
         )}
 
         {/* tutorial section */}

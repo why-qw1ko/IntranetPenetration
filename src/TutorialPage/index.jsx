@@ -311,8 +311,8 @@ sudo systemctl status frps`}</div>
             <div className="tutorial-card">
               <div className="tutorial-card-title">第四步：在本插件中配置 Frpc（客户端）</div>
               <ol className="tutorial-steps">
-                <li>点击左侧菜单「Frp 内网穿透」，进入 Frp 管理页面。</li>
-                <li>在「服务器配置」区域填写你的服务器信息。</li>
+                <li>点击左侧菜单「设置」，找到「FRP 服务器」。</li>
+                <li>填写你的服务器信息，离开输入框后自动保存。</li>
               </ol>
               <div className="tutorial-step-detail">
                 <div><b>服务器地址</b> — 你的服务器公网 IP 或域名（如 <code>123.45.67.89</code>）</div>
@@ -321,15 +321,15 @@ sudo systemctl status frps`}</div>
               </div>
               <ol className="tutorial-steps" start="3">
                 <li>点击「测试连接」确认可以连通服务器。</li>
-                <li>点击「保存配置」。</li>
-                <li>点击「新建代理」，配置要暴露的服务。</li>
+                <li>同账号的其他电脑需开启 uTools 数据同步，并在设置中配置本机 frpc 路径。</li>
+                <li>进入「Frp 内网穿透」，点击「新建代理」，配置要暴露的服务。</li>
               </ol>
               <div className="tutorial-step-detail">
                 <div><b>TCP 代理</b> — 适合数据库、SSH、游戏服务器等。填写本地端口和远程端口。</div>
                 <div><b>HTTP 代理</b> — 适合 Web 服务。填写本地端口和自定义域名。</div>
               </div>
               <ol className="tutorial-steps" start="6">
-                <li>在代理列表中点击「启动」，连接成功后即可通过服务器 IP + 端口（或域名）访问本地服务。</li>
+                <li>勾选需要的代理（可多选或全选），点击「启动选中」，等待对应代理显示「运行中」，即可通过服务器 IP + 端口（或域名）访问本地服务。未勾选的代理不会启动，更换勾选规则前需先停止本次启动。重复的远程端口或域名会在保存时提示，服务端占用会在启动后显示失败原因。</li>
               </ol>
             </div>
 
