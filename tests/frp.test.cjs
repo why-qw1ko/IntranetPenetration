@@ -128,6 +128,47 @@ test('中文名称跨 UTF-8 数据块仍能识别注册成功', async t => {
   assert.equal(service.getFrpcStatus().proxies[0].status, 'running')
 })
 
+test('带方括号的代理名称只更新精确匹配的代理', async t => {
+  const { service, children, close } = controller()
+  t.after(close)
+  await service.startFrpc(server, [tcp('web'), tcp('api[web]', 6001)])
+  children[0].stdout.emit('data', Buffer.from('[2026-10-26] [I] [proxy/proxy.go:120] [session] [api[web]] start proxy success\n'))
+  assert.equal(service.getFrpcStatus().proxies[0].status, 'starting')
+  assert.equal(service.getFrpcStatus().proxies[1].status, 'running')
+  assert.equal(service.getFrpcStatus().state, 'starting')
+  children[0].stdout.emit('data', Buffer.from('[web] start proxy success\n[api[web]] start error: registration failed for [web]\n'))
+  assert.equal(service.getFrpcStatus().proxies[0].status, 'running')
+  assert.equal(service.getFrpcStatus().proxies[0].message, '')
+  assert.equal(service.getFrpcStatus().proxies[1].status, 'error')
+  assert.equal(service.getFrpcStatus().proxies[1].message, 'registration failed for [web]')
+})
+
+test('停止失败后按等待期间到达的注册结果恢复整体状态', async t => {
+  for (const expected of ['running', 'error']) {
+    await t.test(expected, async t => {
+      const { service, children, close } = controller()
+      t.after(close)
+      await service.startFrpc(server, [tcp('web')])
+      if (expected === 'error') children[0].stdout.emit('data', Buffer.from('[web] start proxy success\n'))
+      const output = expected === 'running' ? '[web] start proxy success\n' : '[web] start error: registration rejected\n'
+      children[0].kill = () => {
+        children[0].stdout.emit('data', Buffer.from(output))
+        throw new Error('permission denied')
+      }
+      const stop = service.stopFrpc('frp')
+      if (process.platform === 'win32') {
+        children[0].stdout.emit('data', Buffer.from(output))
+        children[1].emit('error', new Error('permission denied'))
+      }
+      assert.equal((await stop).success, false)
+      const status = service.getFrpcStatus()
+      assert.equal(status.running, true)
+      assert.equal(status.proxies[0].status, expected)
+      assert.equal(status.state, expected)
+    })
+  }
+})
+
 test('停止命令失败时保留运行状态，不允许启动新进程', async t => {
   const { service, children, close } = controller()
   t.after(close)

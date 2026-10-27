@@ -22,6 +22,7 @@ export default function App () {
   const lastRefreshRef = useRef(0)
   const lastLoginRefreshRef = useRef(0)
   const dataLoadedRef = useRef(false)
+  const tunnelRequestRef = useRef(0)
 
   const showToast = useCallback((msg, type = 'info') => {
     setToast({ msg, type })
@@ -71,17 +72,20 @@ export default function App () {
     const now = Date.now()
     if (!force && dataLoadedRef.current && now - lastRefreshRef.current < 30000) return
 
+    const request = ++tunnelRequestRef.current
     setLoading(true)
     try {
       if (!window.services) return
       const list = await window.services.listTunnels()
+      if (request !== tunnelRequestRef.current) return
       setTunnels(Array.isArray(list) ? list : [])
       lastRefreshRef.current = now
       dataLoadedRef.current = true
     } catch (e) {
-      setTunnels([])
+      if (request === tunnelRequestRef.current) setTunnels([])
+    } finally {
+      if (request === tunnelRequestRef.current) setLoading(false)
     }
-    setLoading(false)
   }, [])
 
   const forceRefresh = useCallback(async () => {
@@ -113,7 +117,6 @@ export default function App () {
     })
     window.utools.onPluginOut(() => {
       document.activeElement?.blur?.()
-      setView('')
     })
   }, [loadLoginStatus, loadTunnels])
 
@@ -125,7 +128,8 @@ export default function App () {
   const goToDashboard = useCallback(() => {
     setView('dashboard')
     setSelectedTunnel(null)
-  }, [])
+    loadTunnels(true)
+  }, [loadTunnels])
 
   const handleCreated = useCallback((tunnel) => {
     setView('dashboard')
@@ -140,10 +144,11 @@ export default function App () {
     if (key === 'devtunnel') {
       setView('dashboard')
       setSelectedTunnel(null)
+      loadTunnels(true)
     } else {
       setView('')
     }
-  }, [])
+  }, [loadTunnels])
 
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed(prev => !prev)
