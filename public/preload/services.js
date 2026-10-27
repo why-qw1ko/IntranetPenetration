@@ -1,4 +1,4 @@
-const { spawn, exec } = require('child_process')
+const { spawn, execFile } = require('child_process')
 const http = require('http')
 const url = require('url')
 const path = require('path')
@@ -7,7 +7,8 @@ const os = require('os')
 const { getLocal, setLocal, removeLocal, putDocument } = require('./storage')(window.utools)
 const { isPort, validateServer, validateProxies, generateFrpcConfig, createFrpcController } = require('./frp')
 
-// TextDecoder 替代 iconv-lite，无需第三方依赖
+// UTF-8 优先，兼容 Windows 本地命令的 GBK 错误输出。
+const utf8Decoder = new TextDecoder('utf-8', { fatal: true })
 let gbkDecoder = null
 try { gbkDecoder = new TextDecoder('gbk') } catch (e) {}
 
@@ -82,15 +83,21 @@ function migrateIfNeeded () {
 
 let hostProcess = null
 let hostPid = null
+let hostStopping = false
 let logBuffer = []
 let fileServer = null
 let fileServerPort = null
 let fileServerDir = null
+let fileServerMode = null
 let frpcLogBuffer = []
 const frpcController = createFrpcController({
   getFrpcPath: () => window.services.getFrpcPath(),
   addFrpcLog,
   emitEvent: (name, detail, source) => {
+    // 清理属于该隧道的文件服务，不依赖代理目录页面是否挂载。
+    if (name === 'frpc-exit' && source === 'proxydir' && fileServerMode === 'frp') {
+      window.services.stopFileServer('frp')
+    }
     const event = new CustomEvent(name, { detail })
     event.source = source
     window.dispatchEvent(event)
@@ -162,7 +169,7 @@ function getDevTunnelPath () {
 
 function decodeOutput (buffer) {
   if (Buffer.isBuffer(buffer)) {
-    // Windows 中文系统默认 GBK，优先用 GBK 解码，否则 UTF-8
+    try { return utf8Decoder.decode(buffer) } catch (e) {}
     if (gbkDecoder) {
       try { return gbkDecoder.decode(buffer) } catch (e) {}
     }
@@ -171,11 +178,32 @@ function decodeOutput (buffer) {
   return String(buffer || '')
 }
 
+// 按完整行解码，避免 UTF-8 / GBK 字符和 URL 被 stdout 数据块拆开。
+function watchCommandOutput (stream, consume) {
+  let pending = Buffer.alloc(0)
+  const flush = () => {
+    if (!pending.length) return
+    const text = decodeOutput(pending).trim()
+    pending = Buffer.alloc(0)
+    if (text) consume(text)
+  }
+  stream.on('data', data => {
+    pending = Buffer.concat([pending, Buffer.isBuffer(data) ? data : Buffer.from(data)])
+    let newline
+    while ((newline = pending.indexOf(10)) !== -1) {
+      const text = decodeOutput(pending.subarray(0, newline)).trim()
+      pending = pending.subarray(newline + 1)
+      if (text) consume(text)
+    }
+  })
+  stream.on('end', flush)
+  return flush
+}
+
 function runCommand (args, timeout = 30000) {
   const devtunnelPath = getDevTunnelPath()
   return new Promise((resolve, reject) => {
-    const cmd = `"${devtunnelPath}" ${args.join(' ')}`
-    exec(cmd, { encoding: 'buffer', timeout }, (error, stdout, stderr) => {
+    execFile(devtunnelPath, args, { encoding: 'buffer', timeout, windowsHide: true }, (error, stdout, stderr) => {
       const out = decodeOutput(stdout).trim()
       const err = decodeOutput(stderr).trim()
       if (error) reject(new Error(err || out || error.message))
@@ -248,7 +276,7 @@ window.services = {
     try {
       if (!fs.existsSync(filePath)) return { valid: false, message: '文件不存在' }
       const result = await new Promise((resolve, reject) => {
-        exec(`"${filePath}" --version`, { encoding: 'buffer', timeout: 5000 }, (err, stdout) => {
+        execFile(filePath, ['--version'], { encoding: 'buffer', timeout: 5000, windowsHide: true }, (err, stdout) => {
           if (err) reject(err)
           else resolve(decodeOutput(stdout).trim())
         })
@@ -318,25 +346,21 @@ window.services = {
         }
       }
 
-      child.stdout.on('data', (data) => {
-        const text = decodeOutput(data).trim()
-        if (text) text.split('\n').forEach(line => processOutput(line.trim()))
-      })
+      const flushStdout = watchCommandOutput(child.stdout, processOutput)
 
-      child.stderr.on('data', (data) => {
-        const text = decodeOutput(data).trim()
-        if (text) {
-          addLog('stderr', text)
-          const deviceMatch = text.match(/open the page (https:\/\/\S+).*enter the code (\S+)/i)
-          if (deviceMatch && !browserOpened) {
-            browserOpened = true
-            try { window.utools.shellOpenExternal(deviceMatch[1]) } catch (e) {}
-            window.dispatchEvent(new CustomEvent('tunnel-login-code', { detail: { url: deviceMatch[1], code: deviceMatch[2] } }))
-          }
+      const flushStderr = watchCommandOutput(child.stderr, text => {
+        addLog('stderr', text)
+        const deviceMatch = text.match(/open the page (https:\/\/\S+).*enter the code (\S+)/i)
+        if (deviceMatch && !browserOpened) {
+          browserOpened = true
+          try { window.utools.shellOpenExternal(deviceMatch[1]) } catch (e) {}
+          window.dispatchEvent(new CustomEvent('tunnel-login-code', { detail: { url: deviceMatch[1], code: deviceMatch[2] } }))
         }
       })
 
       child.on('close', (code) => {
+        flushStdout()
+        flushStderr()
         if (code === 0) {
           addLog('system', '登录成功')
           window.dispatchEvent(new CustomEvent('tunnel-login-done', { detail: { success: true } }))
@@ -390,19 +414,6 @@ window.services = {
         }
       }))
 
-      // 从日志中提取运行中隧道的URL
-      if (hostProcess && window.__runningTunnelId) {
-        const logs = logBuffer.slice(-50)
-        for (let i = logs.length - 1; i >= 0; i--) {
-          const text = logs[i].text
-          const urlMatches = text.match(/https:\/\/\S+\.devtunnels\.ms/g)
-          if (urlMatches && urlMatches.length > 0) {
-            this.tunnelUrlCache[window.__runningTunnelId] = urlMatches.length > 1 ? urlMatches[1] : urlMatches[0]
-            break
-          }
-        }
-      }
-
       return detailed
     } catch (e) {
       return []
@@ -423,6 +434,7 @@ window.services = {
   },
 
   async createTunnel (options = {}) {
+    if (options.port !== undefined && !isPort(options.port)) throw new Error('端口号必须是 1-65535 之间的整数')
     // 限制最多 2 个免费隧道
     const MAX_TUNNELS = 2
     try {
@@ -438,7 +450,7 @@ window.services = {
     if (options.tunnelId) createArgs.push(options.tunnelId)
     if (options.anonymous) createArgs.push('-a')
     if (options.expiration) createArgs.push('-e', options.expiration)
-    if (options.description) createArgs.push('-d', `"${options.description}"`)
+    if (options.description) createArgs.push('-d', options.description)
     if (options.labels) createArgs.push('-l', options.labels)
     createArgs.push('-j')
 
@@ -460,14 +472,15 @@ window.services = {
         addLog('system', '端口 ' + options.port + ' 已添加')
       } catch (e) {
         addLog('error', '添加端口失败: ' + e.message)
+        throw new Error('隧道 ' + tunnelId + ' 已创建，但添加端口失败: ' + e.message)
       }
     }
 
     try {
-      return await this.getTunnelWithPorts(tunnelId)
-    } catch (e) {
-      return { ...tunnel, tunnelId, ports: options.port ? [{ portNumber: options.port, protocol: options.protocol || 'auto' }] : [] }
-    }
+      const full = await this.getTunnelWithPorts(tunnelId)
+      if (full) return full
+    } catch (e) {}
+    return { ...tunnel, tunnelId, ports: options.port ? [{ portNumber: options.port, protocol: options.protocol || 'auto' }] : [] }
   },
 
   /**
@@ -475,15 +488,20 @@ window.services = {
    */
   async updateTunnel (tunnelId, options = {}) {
     const args = ['update', tunnelId]
-    if (options.description !== undefined) args.push('-d', `"${options.description}"`)
-    if (options.anonymous !== undefined) args.push(options.anonymous ? '--allow-anonymous' : '--deny-anonymous')
+    if (options.description !== undefined) args.push('-d', options.description)
     if (options.expiration) args.push('-e', options.expiration)
     args.push('-j')
 
-    addLog('system', 'devtunnel ' + args.join(' '))
     try {
-      const result = await runCommand(args)
-      addLog('stdout', result)
+      if (options.description !== undefined || options.expiration) {
+        addLog('system', 'devtunnel ' + args.join(' '))
+        const result = await runCommand(args)
+        addLog('stdout', result)
+      }
+      if (options.anonymous !== undefined) {
+        addLog('system', '正在' + (options.anonymous ? '启用' : '撤销') + '隧道匿名访问: ' + tunnelId)
+        await require('./devtunnel-access')(runCommand, tunnelId, options.anonymous)
+      }
       addLog('system', '隧道已更新: ' + tunnelId)
       return await this.getTunnelWithPorts(tunnelId)
     } catch (e) {
@@ -530,6 +548,7 @@ window.services = {
 
   async addPort (tunnelId, port, protocol) {
     try {
+      if (!isPort(port)) throw new Error('端口号必须是 1-65535 之间的整数')
       const args = ['port', 'create', tunnelId, '-p', String(port)]
       if (protocol && protocol !== 'auto') args.push('--protocol', protocol)
       args.push('-j')
@@ -546,6 +565,7 @@ window.services = {
 
   async deletePort (tunnelId, port) {
     try {
+      if (!isPort(port)) throw new Error('端口号必须是 1-65535 之间的整数')
       const args = ['port', 'delete', tunnelId, '-p', String(port), '-j']
       addLog('system', 'devtunnel ' + args.join(' '))
       const result = await runCommand(args)
@@ -562,29 +582,51 @@ window.services = {
 
   tunnelUrlCache: {}, // 存储隧道URL
 
-  startHost (tunnelId, port, allowAnonymous) {
+  async startHost (tunnelId, port, allowAnonymous) {
     if (hostProcess) return { success: false, message: '已有隧道在运行中，请先停止' }
 
     const args = ['host']
     if (tunnelId) args.push(tunnelId)
-    if (allowAnonymous) args.push('-a')
+    // 省略该参数时沿用已保存的访问权限；仅显式选择匿名访问时追加 -a。
+    if (allowAnonymous === true) args.push('-a')
 
     const devtunnelPath = getDevTunnelPath()
+    const ownedFileServer = fileServerMode === 'devtunnel' && Number(fileServerPort) === Number(port) ? fileServer : null
     addLog('system', 'devtunnel ' + args.join(' '))
 
     try {
-      hostProcess = spawn(devtunnelPath, args, { windowsHide: true })
-      hostPid = hostProcess.pid
+      const child = spawn(devtunnelPath, args, { windowsHide: true })
+      hostProcess = child
+      hostPid = child.pid
+      hostStopping = false
+      let spawned = false
+      let closed = false
+      let settleStart
+      const finish = (code, message) => {
+        if (closed) return
+        flushStdout()
+        flushStderr()
+        closed = true
+        if (hostProcess !== child) return
+        hostProcess = null
+        hostPid = null
+        hostStopping = false
+        delete this.tunnelUrlCache[tunnelId]
+        if (window.__runningTunnelId === tunnelId) window.__runningTunnelId = null
+        if (ownedFileServer && fileServer === ownedFileServer) this.stopFileServer('devtunnel')
+        addLog('system', '进程退出 (code: ' + code + ')')
+        window.dispatchEvent(new CustomEvent('tunnel-host-status', { detail: { ...this.getHostStatus(), tunnelId } }))
+        window.dispatchEvent(new CustomEvent('tunnel-exit', { detail: code }))
+        if (!spawned) settleStart?.({ success: false, message: message || '隧道进程在启动前退出 (' + code + ')' })
+      }
 
-      hostProcess.stdout.on('data', (data) => {
-        const text = decodeOutput(data).trim()
+      const flushStdout = watchCommandOutput(child.stdout, text => {
+        if (closed || hostProcess !== child) return
         if (text) {
           addLog('stdout', text)
           window.dispatchEvent(new CustomEvent('tunnel-log', { detail: text }))
-          // 提取URL（格式：https://xxx-xxx.devtunnels.ms）
           const urlMatches = text.match(/https:\/\/\S+\.devtunnels\.ms/g)
           if (urlMatches && urlMatches.length > 0) {
-            // 优先使用不带端口的URL（第二个）
             const url = urlMatches.length > 1 ? urlMatches[1] : urlMatches[0]
             this.tunnelUrlCache[tunnelId] = url
             window.dispatchEvent(new CustomEvent('tunnel-url', { detail: { tunnelId, url } }))
@@ -592,55 +634,76 @@ window.services = {
         }
       })
 
-      hostProcess.stderr.on('data', (data) => {
-        const text = decodeOutput(data).trim()
+      const flushStderr = watchCommandOutput(child.stderr, text => {
+        if (closed || hostProcess !== child) return
         if (text) {
           addLog('stderr', text)
           window.dispatchEvent(new CustomEvent('tunnel-error', { detail: text }))
         }
       })
 
-      hostProcess.on('close', (code) => {
-        addLog('system', '进程退出 (code: ' + code + ')')
-        window.dispatchEvent(new CustomEvent('tunnel-exit', { detail: code }))
-        hostProcess = null
-        hostPid = null
+      child.once('close', code => finish(code))
+      return await new Promise(resolve => {
+        settleStart = resolve
+        child.once('spawn', () => {
+          if (closed || hostProcess !== child) return
+          spawned = true
+          window.__runningTunnelId = tunnelId
+          window.dispatchEvent(new CustomEvent('tunnel-host-status', { detail: { ...this.getHostStatus(), tunnelId } }))
+          resolve({ success: true, pid: child.pid })
+        })
+        child.on('error', err => {
+          if (closed || hostProcess !== child) return
+          addLog('error', '进程错误: ' + err.message)
+          window.dispatchEvent(new CustomEvent('tunnel-error', { detail: err.message }))
+          if (!spawned) finish(-1, err.message)
+          resolve({ success: false, message: err.message })
+        })
       })
-
-      hostProcess.on('error', (err) => {
-        addLog('error', '启动失败: ' + err.message)
-        window.dispatchEvent(new CustomEvent('tunnel-error', { detail: err.message }))
-        hostProcess = null
-        hostPid = null
-      })
-
-      return { success: true, pid: hostPid }
     } catch (e) {
-      hostProcess = null
-      hostPid = null
+      if (ownedFileServer && fileServer === ownedFileServer) this.stopFileServer('devtunnel')
       return { success: false, message: e.message }
     }
   },
 
-  stopHost () {
+  async stopHost () {
     if (!hostProcess) return { success: false, message: '没有运行中的隧道' }
-    try {
-      spawn('taskkill', ['/pid', String(hostPid), '/T', '/F'], { windowsHide: true })
-      addLog('system', '正在停止...')
-      // 清除运行中隧道的URL缓存
-      if (window.__runningTunnelId) {
-        delete this.tunnelUrlCache[window.__runningTunnelId]
+    if (hostStopping) return { success: false, message: '正在停止，请稍候' }
+    const child = hostProcess
+    hostStopping = true
+    addLog('system', '正在停止...')
+    return await new Promise(resolve => {
+      let settled = false
+      const complete = result => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        child.removeListener('close', onClose)
+        child.removeListener('error', onError)
+        if (hostProcess === child) hostStopping = false
+        resolve(result)
       }
-      hostProcess = null
-      hostPid = null
-      return { success: true }
-    } catch (e) {
-      return { success: false, message: e.message }
-    }
+      const onClose = () => complete({ success: true })
+      const onError = err => complete({ success: false, message: err.message })
+      const timer = setTimeout(() => complete({ success: false, message: '停止超时，请重试' }), 5000)
+      child.once('close', onClose)
+      child.once('error', onError)
+      try {
+        if (process.platform === 'win32') {
+          const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true })
+          killer.once('error', onError)
+          killer.once('close', code => {
+            if (code && hostProcess === child) complete({ success: false, message: '停止失败 (' + code + ')' })
+          })
+        } else if (!child.kill()) {
+          complete({ success: false, message: '无法发送停止信号，请重试' })
+        }
+      } catch (err) { complete({ success: false, message: err.message }) }
+    })
   },
 
   getHostStatus () {
-    return { running: hostProcess !== null, pid: hostPid }
+    return { running: hostProcess !== null, pid: hostPid, stopping: hostStopping }
   },
 
   getTunnelUrl (tunnelId) {
@@ -765,7 +828,8 @@ window.services = {
     return dirs ? dirs[0] : null
   },
 
-  startFileServer (dirPath, port = 3000, mode) {
+  startFileServer (dirPath, port = 3000, mode = 'devtunnel') {
+    if (!isPort(port)) return Promise.resolve({ success: false, message: '端口号必须是 1-65535 之间的整数' })
     if (fileServer) return Promise.resolve({ success: false, message: '文件服务器已在运行中' })
     if (!fs.existsSync(dirPath)) return Promise.resolve({ success: false, message: '目录不存在' })
 
@@ -813,6 +877,12 @@ window.services = {
       return (size / (1024 * 1024 * 1024)).toFixed(1) + ' GB'
     }
 
+    const escapeHtml = value => String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char])
+    const isWithinRoot = (root, target) => {
+      const relative = path.relative(root, target)
+      return relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative)
+    }
+
     function renderDirPage (dirUrl, entries, parentPath) {
       const items = entries.map(e => {
         const icon = e.isDirectory
@@ -822,12 +892,12 @@ window.services = {
         const href = dirUrl + encodeURIComponent(e.name) + (e.isDirectory ? '/' : '')
         const size = e.isDirectory ? '-' : getFileSize(e.size)
         const mtime = e.mtime ? new Date(e.mtime).toLocaleString('zh-CN') : '-'
-        return `<tr><td>${icon}</td><td><a href="${href}">${name}</a></td><td>${size}</td><td>${mtime}</td></tr>`
+        return `<tr><td>${icon}</td><td><a href="${escapeHtml(href)}">${escapeHtml(name)}</a></td><td>${size}</td><td>${mtime}</td></tr>`
       }).join('\n')
 
       const parentIcon = '<svg width="16" height="16" viewBox="0 0 16 16" fill="#6C8EBF"><path d="M1.5 2h4.3l1.2 2H14.5a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/></svg>'
       const parentRow = parentPath
-        ? `<tr><td>${parentIcon}</td><td><a href="${parentPath}">..</a></td><td>-</td><td>-</td></tr>`
+        ? `<tr><td>${parentIcon}</td><td><a href="${escapeHtml(parentPath)}">..</a></td><td>-</td><td>-</td></tr>`
         : ''
 
       return `<!DOCTYPE html>
@@ -835,7 +905,7 @@ window.services = {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>📂 ${dirUrl}</title>
+<title>📂 ${escapeHtml(decodeURIComponent(dirUrl))}</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f8f9fa; color: #1a1a1a; padding: 24px; }
@@ -856,7 +926,7 @@ window.services = {
 <body>
   <div class="header">
     <h1>📂 目录浏览</h1>
-    <span class="path">${dirUrl}</span>
+    <span class="path">${escapeHtml(decodeURIComponent(dirUrl))}</span>
   </div>
   <table>
     <thead><tr><th></th><th>名称</th><th>大小</th><th>修改时间</th></tr></thead>
@@ -872,27 +942,35 @@ window.services = {
 
     return new Promise((resolve) => {
       try {
-        const rootDir = path.resolve(dirPath)
+        const rootDir = fs.realpathSync(dirPath)
+        if (!fs.statSync(rootDir).isDirectory()) throw new Error('请选择有效目录')
 
-        fileServer = http.createServer((req, res) => {
+        const server = http.createServer((req, res) => {
           try {
             const parsedUrl = url.parse(req.url)
-            let reqPath = decodeURIComponent(parsedUrl.pathname)
+            const reqPath = decodeURIComponent(parsedUrl.pathname)
 
             // 安全检查：防止目录遍历
-            const fullPath = path.resolve(path.join(rootDir, reqPath))
-            if (!fullPath.startsWith(rootDir)) {
+            const requestedPath = path.resolve(path.join(rootDir, reqPath))
+            if (!isWithinRoot(rootDir, requestedPath)) {
               res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' })
               res.end('403 禁止访问')
               return
             }
 
-            if (!fs.existsSync(fullPath)) {
+            if (!fs.existsSync(requestedPath)) {
               res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
               res.end('404 文件不存在')
               return
             }
 
+            // Windows junction 和符号链接也必须指向分享根目录内。
+            const fullPath = fs.realpathSync(requestedPath)
+            if (!isWithinRoot(rootDir, fullPath)) {
+              res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' })
+              res.end('403 禁止访问')
+              return
+            }
             const stat = fs.statSync(fullPath)
 
             if (stat.isDirectory()) {
@@ -903,17 +981,24 @@ window.services = {
               })
               entries = entries.map(e => {
                 try {
-                  const s = fs.statSync(path.join(fullPath, e.name))
-                  return { ...e, size: s.size, mtime: s.mtimeMs }
+                  const entryPath = fs.realpathSync(path.join(fullPath, e.name))
+                  if (!isWithinRoot(rootDir, entryPath)) return null
+                  const s = fs.statSync(entryPath)
+                  return { name: e.name, isDirectory: s.isDirectory(), size: s.size, mtime: s.mtimeMs }
                 } catch (err) {
-                  return { ...e, size: 0, mtime: 0 }
+                  return null
                 }
-              })
+              }).filter(Boolean)
 
-              const dirUrl = reqPath.endsWith('/') ? reqPath : reqPath + '/'
+              const relativeUrl = path.relative(rootDir, requestedPath).split(path.sep).map(encodeURIComponent).join('/')
+              const dirUrl = '/' + relativeUrl + (relativeUrl ? '/' : '')
               const parentPath = dirUrl !== '/' ? url.resolve(dirUrl, '..') : null
               const html = renderDirPage(dirUrl, entries, parentPath)
-              res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+              res.writeHead(200, {
+                'Content-Type': 'text/html; charset=utf-8',
+                'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
+                'X-Content-Type-Options': 'nosniff'
+              })
               res.end(html)
             } else {
               const mime = getMimeType(fullPath)
@@ -922,24 +1007,32 @@ window.services = {
                 'Content-Length': stat.size,
                 'Content-Disposition': 'inline'
               })
-              fs.createReadStream(fullPath).pipe(res)
+              const stream = fs.createReadStream(fullPath)
+              stream.on('error', () => res.destroy())
+              res.on('close', () => stream.destroy())
+              stream.pipe(res)
             }
           } catch (err) {
-            res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' })
-            res.end('500 服务器错误: ' + err.message)
+            res.writeHead(err instanceof URIError ? 400 : 500, { 'Content-Type': 'text/plain; charset=utf-8' })
+            res.end(err instanceof URIError ? '400 无效请求路径' : '500 无法读取文件')
           }
         })
 
-        fileServer.on('error', (err) => {
+        fileServer = server
+        fileServerMode = mode
+        server.on('error', (err) => {
           if (mode === 'frp') addFrpcLog('error', '文件服务器错误: ' + err.message, 'proxydir')
           else addLog('error', '文件服务器错误: ' + err.message)
-          fileServer = null
-          fileServerPort = null
-          fileServerDir = null
+          if (fileServer === server) {
+            fileServer = null
+            fileServerPort = null
+            fileServerDir = null
+            fileServerMode = null
+          }
           resolve({ success: false, message: '端口 ' + port + ' 启动失败: ' + err.message })
         })
 
-        fileServer.listen(port, '127.0.0.1', () => {
+        server.listen(port, '127.0.0.1', () => {
           fileServerPort = port
           fileServerDir = rootDir
           if (mode === 'frp') addFrpcLog('system', '文件服务器已启动: http://127.0.0.1:' + port + ' -> ' + rootDir, 'proxydir')
@@ -949,20 +1042,26 @@ window.services = {
         })
       } catch (e) {
         fileServer = null
+        fileServerPort = null
+        fileServerDir = null
+        fileServerMode = null
         resolve({ success: false, message: e.message })
       }
     })
   },
 
-  stopFileServer (mode) {
+  stopFileServer (mode = 'devtunnel') {
     if (!fileServer) return { success: false, message: '文件服务器未在运行' }
+    if (fileServerMode !== mode) return { success: false, message: '请在启动文件服务器的模式下停止' }
     try {
       fileServer.close()
+      fileServer.closeAllConnections?.()
       if (mode === 'frp') addFrpcLog('system', '文件服务器已停止', 'proxydir')
       else addLog('system', '文件服务器已停止')
       fileServer = null
       fileServerPort = null
       fileServerDir = null
+      fileServerMode = null
       return { success: true }
     } catch (e) {
       return { success: false, message: e.message }
@@ -970,7 +1069,7 @@ window.services = {
   },
 
   getFileServerStatus () {
-    return { running: fileServer !== null, port: fileServerPort, dir: fileServerDir }
+    return { running: fileServer !== null, port: fileServerPort, dir: fileServerDir, mode: fileServerMode }
   },
 
   // ==================== Frp 管理 ====================
@@ -986,14 +1085,15 @@ window.services = {
 
   async saveFrpConfig (config) {
     try {
-      const fields = {}
-      const existing = window.utools.db.get('frp-config')
-      const server = { serverAddr: '', serverPort: '7000', token: '', ...existing?.server, ...config.server }
-      const error = validateServer(server, false) || (config.proxies !== undefined && validateProxies(config.proxies, server))
-      if (error) throw new Error(error)
-      if (config.server) fields.server = { ...server, serverAddr: server.serverAddr.trim(), serverPort: String(server.serverPort) }
-      if (config.proxies !== undefined) fields.proxies = config.proxies
-      putDocument('frp-config', fields)
+      putDocument('frp-config', existing => {
+        const fields = {}
+        const server = { serverAddr: '', serverPort: '7000', token: '', ...existing?.server, ...config.server }
+        const error = validateServer(server, false) || (config.proxies !== undefined && validateProxies(config.proxies, server))
+        if (error) throw new Error(error)
+        if (config.server) fields.server = { ...server, serverAddr: server.serverAddr.trim(), serverPort: String(server.serverPort) }
+        if (config.proxies !== undefined) fields.proxies = config.proxies
+        return fields
+      })
       return { success: true }
     } catch (e) {
       return { success: false, message: e.message }
@@ -1034,7 +1134,7 @@ window.services = {
     try {
       if (!fs.existsSync(filePath)) return { valid: false, message: '文件不存在' }
       const result = await new Promise((resolve, reject) => {
-        exec(`"${filePath}" --version`, { encoding: 'buffer', timeout: 5000 }, (err, stdout) => {
+        execFile(filePath, ['--version'], { encoding: 'buffer', timeout: 5000, windowsHide: true }, (err, stdout) => {
           if (err) reject(err)
           else resolve(decodeOutput(stdout).trim())
         })

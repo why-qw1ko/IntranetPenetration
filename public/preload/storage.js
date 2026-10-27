@@ -30,7 +30,8 @@ module.exports = function createStorage (utools) {
 
   function putDocument (id, fields) {
     const existing = utools.db.get(id)
-    const result = utools.db.put({ ...existing, ...fields, _id: id })
+    const patch = typeof fields === 'function' ? fields(existing) : fields
+    const result = utools.db.put({ ...existing, ...patch, _id: id })
     if (!result?.ok) throw new Error(result?.message || '写入失败，请重试')
   }
 

@@ -22,6 +22,12 @@ export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onR
     } catch (e) { return null }
   })
   const logEndRef = useRef(null)
+  const syncHostStatus = useCallback(() => {
+    try {
+      const status = window.services?.getHostStatus()
+      setRunningTunnel(status?.running ? (window.__runningTunnelId || null) : null)
+    } catch (e) { setRunningTunnel(null) }
+  }, [])
 
   // 保存 tab 记忆（本地存储）
   useEffect(() => {
@@ -44,12 +50,12 @@ export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onR
       }
     }
     const onLoginCode = (e) => setLoginCode(e.detail)
-    const onExit = (e) => {
-      setRunningTunnel(null)
-      window.__runningTunnelId = null
+    const onExit = () => {
+      syncHostStatus()
       showToast('隧道已停止', 'info')
     }
     const onUrlReady = () => {
+      syncHostStatus()
       // URL 更新时触发重新渲染
       setUrlVersion(v => v + 1)
     }
@@ -63,6 +69,8 @@ export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onR
     window.addEventListener('tunnel-exit', onExit)
     window.addEventListener('tunnel-url', onUrlReady)
     window.addEventListener('tunnel-error', onError)
+    window.addEventListener('tunnel-host-status', syncHostStatus)
+    syncHostStatus()
     return () => {
       window.removeEventListener('tunnel-log-entry', onEntry)
       window.removeEventListener('tunnel-login-done', onLoginDone)
@@ -70,8 +78,9 @@ export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onR
       window.removeEventListener('tunnel-exit', onExit)
       window.removeEventListener('tunnel-url', onUrlReady)
       window.removeEventListener('tunnel-error', onError)
+      window.removeEventListener('tunnel-host-status', syncHostStatus)
     }
-  }, [onLogin, showToast])
+  }, [onLogin, showToast, syncHostStatus])
 
   // 检查运行状态（进入时）
   useEffect(() => {
@@ -149,31 +158,27 @@ export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onR
       }
     }
 
-    const result = window.services.startHost(tunnel.tunnelId, port, true)
+    const result = await window.services.startHost(tunnel.tunnelId, port)
     if (result.success) {
-      setRunningTunnel(tunnel.tunnelId)
-      window.__runningTunnelId = tunnel.tunnelId // 持久化到全局
+      syncHostStatus()
       showToast('启动中...')
     } else {
       // 启动失败时回滚文件服务器
       if ((tunnel.description || '').startsWith('代理目录: ')) window.services.stopFileServer()
       showToast('启动失败: ' + result.message, 'error')
     }
-  }, [showToast])
+  }, [syncHostStatus, showToast])
 
-  const handleStop = useCallback((e, tunnel) => {
+  const handleStop = useCallback(async (e) => {
     e.stopPropagation()
-    // 代理目录隧道：同时停止文件服务器
-    if ((tunnel?.description || '').startsWith('代理目录: ')) window.services.stopFileServer()
-    const result = window.services.stopHost()
+    const result = await window.services.stopHost()
     if (result.success) {
-      setRunningTunnel(null)
-      window.__runningTunnelId = null // 清除全局状态
+      syncHostStatus()
       showToast('已停止', 'success')
     } else {
       showToast('停止失败: ' + result.message, 'error')
     }
-  }, [showToast])
+  }, [syncHostStatus, showToast])
 
   const handleCopyUrl = useCallback((e, url) => {
     e.stopPropagation()

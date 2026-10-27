@@ -95,6 +95,55 @@ test('FRP 服务器与规则独立保存，不丢 Token，不覆盖代理列表'
   assert.equal((await api.getFrpConfig()).proxies.length, 1)
 })
 
+test('文档 updater 单次读取并保留同一快照的版本和未修改字段', () => {
+  const { utools, docs } = database()
+  const storage = createStorage(utools)
+  docs.set('frp-config', { _id: 'frp-config', _rev: '1', server: { serverPort: '7000', token: 'kept-token' }, proxies: [{ name: 'kept' }] })
+  const get = utools.db.get
+  let reads = 0
+  utools.db.get = id => { reads++; return get(id) }
+  storage.putDocument('frp-config', existing => ({ server: { ...existing.server, serverPort: '7001' } }))
+  assert.equal(reads, 1)
+  const saved = docs.get('frp-config')
+  assert.equal(saved._rev, '1')
+  assert.equal(saved.server.serverPort, '7001')
+  assert.equal(saved.server.token, 'kept-token')
+  assert.equal(saved.proxies[0].name, 'kept')
+  storage.putDocument('new-document', existing => {
+    assert.equal(existing, null)
+    return { value: 'created' }
+  })
+  assert.equal(docs.get('new-document').value, 'created')
+  assert.throws(() => storage.putDocument('new-document', () => { throw new Error('invalid fields') }), /invalid fields/)
+  assert.equal(docs.get('new-document').value, 'created')
+})
+
+test('FRP 合并期间发生同步更新必须保留更新并报告版本冲突', async () => {
+  const { api, docs, utools } = services()
+  docs.set('frp-config', { _id: 'frp-config', _rev: '1', server: { serverAddr: 'server-a', serverPort: '7000', token: 'old-token' }, proxies: [] })
+  const get = utools.db.get
+  let reads = 0
+  utools.db.get = id => {
+    const snapshot = get(id)
+    if (id === 'frp-config' && ++reads === 1) {
+      docs.set(id, { ...snapshot, _rev: '2', server: { ...snapshot.server, serverAddr: 'server-b', token: 'new-token' } })
+    }
+    return snapshot
+  }
+  utools.db.put = doc => {
+    if (doc._rev !== docs.get(doc._id)?._rev) return { error: true, message: 'conflict' }
+    docs.set(doc._id, structuredClone(doc))
+    return { ok: true }
+  }
+  const result = await api.saveFrpConfig({ server: { serverPort: '7001' } })
+  assert.equal(result.success, false)
+  assert.match(result.message, /conflict/)
+  assert.equal(reads, 1)
+  assert.equal(docs.get('frp-config').server.serverAddr, 'server-b')
+  assert.equal(docs.get('frp-config').server.token, 'new-token')
+  assert.equal(docs.get('frp-config').server.serverPort, '7000')
+})
+
 test('数据库冲突不会被当作保存成功', async () => {
   const { api, utools } = services()
   utools.db.put = () => ({ error: true, message: 'conflict' })

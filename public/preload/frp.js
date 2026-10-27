@@ -63,6 +63,7 @@ function createFrpcController ({ getFrpcPath, addFrpcLog, emitEvent }) {
   let active = null
   let status = { running: false, state: 'stopped', proxies: [] }
   const snapshot = () => ({ ...status, proxies: status.proxies.map(proxy => ({ ...proxy })) })
+  const getProxyState = () => status.proxies.some(p => p.status === 'starting') ? 'starting' : status.proxies.every(p => p.status === 'running') ? 'running' : 'error'
   const emit = (name, detail, source = status.source) => {
     emitEvent(name, detail, source)
   }
@@ -124,15 +125,26 @@ function createFrpcController ({ getFrpcPath, addFrpcLog, emitEvent }) {
           const text = line.replace(/\x1b\[[0-9;]*m/g, '').trim()
           if (!text) return
           addFrpcLog(type, redact(text), source)
+          let registration
           for (const proxy of status.proxies) {
-            if (!text.includes(`[${proxy.name}]`)) continue
-            if (/start proxy success/i.test(text)) { proxy.status = 'running'; proxy.message = '' }
-            const failure = text.match(/start error:\s*(.*)/i)
-            if (failure) { proxy.status = 'error'; proxy.message = redact(failure[1]) }
+            const label = `[${proxy.name}]`
+            let index = text.indexOf(label)
+            while (index !== -1) {
+              const event = text.slice(index + label.length).match(/^\s+(start proxy success\b|start error:\s*(.*))/i)
+              if ((index === 0 || /\s/.test(text[index - 1])) && event) {
+                // 优先完整的外层名称，且不把失败原因中引用的其他代理当作日志来源。
+                if (!registration || index < registration.index || (index === registration.index && proxy.name.length > registration.proxy.name.length)) registration = { proxy, index, event }
+                break
+              }
+              index = text.indexOf(label, index + 1)
+            }
           }
-          if (status.state !== 'stopping') {
-            status.state = status.proxies.some(p => p.status === 'starting') ? 'starting' : status.proxies.every(p => p.status === 'running') ? 'running' : 'error'
+          if (registration) {
+            const { proxy, event } = registration
+            proxy.status = event[2] === undefined ? 'running' : 'error'
+            proxy.message = event[2] === undefined ? '' : redact(event[2])
           }
+          if (status.state !== 'stopping') status.state = getProxyState()
           notify()
         }
         stream.on('data', data => {
@@ -173,7 +185,6 @@ function createFrpcController ({ getFrpcPath, addFrpcLog, emitEvent }) {
     if (source && source !== status.source) return { success: false, message: '请在启动 frpc 的页面停止' }
     if (status.state === 'stopping') return { success: false, message: '正在停止，请稍候' }
     const child = active
-    const previousState = status.state
     status.state = 'stopping'
     notify()
     return await new Promise(resolve => {
@@ -184,7 +195,7 @@ function createFrpcController ({ getFrpcPath, addFrpcLog, emitEvent }) {
         clearTimeout(timer)
         child.removeListener('close', onClose)
         child.removeListener('error', onError)
-        if (!result.success && active === child) { status.state = previousState; notify() }
+        if (!result.success && active === child) { status.state = getProxyState(); notify() }
         resolve(result)
       }
       const onClose = () => complete({ success: true })
