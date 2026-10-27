@@ -64,6 +64,8 @@
   align-items: center;
   justify-content: space-between;
   margin-bottom: 12px;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .frp-proxy-card {
@@ -75,12 +77,16 @@
   align-items: center;
   justify-content: space-between;
   margin-bottom: 6px;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .frp-proxy-name {
   font-size: 14px;
   font-weight: 600;
   color: var(--text-title);
+  overflow-wrap: anywhere;
+  flex: 1;
 }
 
 .frp-proxy-type {
@@ -135,6 +141,7 @@
 .frp-proxy-actions {
   display: flex;
   gap: 6px;
+  flex-wrap: wrap;
 }
 
 .frp-form-overlay {
@@ -230,4 +237,54 @@
   font-family: 'Cascadia Code', 'Fira Code', monospace;
   color: var(--text);
   word-break: break-all;
+}
+
+.frp-proxy-controls {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.frp-selection-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-bottom: 12px;
+  color: var(--text-sub);
+  font-size: 12px;
+}
+
+.frp-selection-toolbar .form-checkbox {
+  margin: 0;
+}
+
+.frp-proxy-select {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.frp-proxy-select input {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  accent-color: var(--brand);
+}
+
+.frp-runtime-summary {
+  color: var(--text-sub);
+  font-size: 12px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+
+.frp-proxy-error {
+  color: var(--red);
+  font-size: 12px;
+  margin-bottom: 10px;
+  overflow-wrap: anywhere;
 }
