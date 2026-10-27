@@ -3,8 +3,15 @@ import { ClipboardCopy, Play, Square, FolderOpen } from 'lucide-react'
 import './index.css'
 
 function parsePort (value) {
+  if (!/^\d+$/.test(value)) return null
   const num = Number(value)
   return Number.isInteger(num) && num >= 1 && num <= 65535 ? num : null
+}
+
+async function checkWrite (operation) {
+  const result = await operation
+  if (result?.success === false) throw new Error(result.message || '操作失败')
+  return result
 }
 
 export default function TunnelDetail ({ tunnel: initialTunnel, onBack, showToast }) {
@@ -14,7 +21,7 @@ export default function TunnelDetail ({ tunnel: initialTunnel, onBack, showToast
   const [port, setPort] = useState(initialTunnel.ports?.[0]?.portNumber?.toString() || '')
   const [protocol, setProtocol] = useState(initialTunnel.ports?.[0]?.protocol || 'auto')
   const [saving, setSaving] = useState(false)
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
   const [logs, setLogs] = useState([])
   const logEndRef = useRef(null)
 
@@ -37,84 +44,125 @@ export default function TunnelDetail ({ tunnel: initialTunnel, onBack, showToast
     if (url) setTunnelUrl(url)
   }, [tunnelId, logs])
 
-  // 日志监听 + 隧道退出事件
+  const syncHostStatus = useCallback(() => {
+    try {
+      const status = window.services?.getHostStatus()
+      setRunning(Boolean(status?.running && window.__runningTunnelId === tunnelId))
+      setTunnelUrl(window.services?.getTunnelUrl(tunnelId) || '')
+    } catch (e) { setRunning(false) }
+  }, [tunnelId])
+
+  // 日志监听 + 隧道运行状态事件
   useEffect(() => {
     const history = window.services?.getLogBuffer() || []
     setLogs(history.map(h => ({ ...h, time: new Date(h.time) })))
 
     const onLogEntry = (e) => setLogs(prev => [...prev, { ...e.detail, time: new Date(e.detail.time) }])
-    const onExit = () => {
-      setRunning(false)
-      window.__runningTunnelId = null
-    }
     const onUrl = (e) => {
       if (e.detail.tunnelId === tunnelId) setTunnelUrl(e.detail.url)
     }
     window.addEventListener('tunnel-log-entry', onLogEntry)
-    window.addEventListener('tunnel-exit', onExit)
+    window.addEventListener('tunnel-exit', syncHostStatus)
+    window.addEventListener('tunnel-host-status', syncHostStatus)
     window.addEventListener('tunnel-url', onUrl)
+    syncHostStatus()
     return () => {
       window.removeEventListener('tunnel-log-entry', onLogEntry)
-      window.removeEventListener('tunnel-exit', onExit)
+      window.removeEventListener('tunnel-exit', syncHostStatus)
+      window.removeEventListener('tunnel-host-status', syncHostStatus)
       window.removeEventListener('tunnel-url', onUrl)
     }
-  }, [tunnelId])
+  }, [tunnelId, syncHostStatus])
 
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [logs])
 
-  // 异步加载完整数据（含端口）
+  // 异步加载完整数据（含端口），卸载后不再覆盖草稿。
   useEffect(() => {
+    let active = true
+    setLoading(true)
     const loadFull = async () => {
-      if (window.services && tunnelId) {
-        setLoading(true)
-        try {
-          const full = await window.services.getTunnelWithPorts(tunnelId)
-          if (full) {
-            setTunnel(full)
-            setPort(full.ports?.[0]?.portNumber?.toString() || '')
-            setProtocol(full.ports?.[0]?.protocol || 'auto')
-            setDescription(full.description || '')
-          }
-        } catch (e) {}
-        setLoading(false)
+      try {
+        if (!window.services || !tunnelId) return
+        const full = await window.services.getTunnelWithPorts(tunnelId)
+        if (active && full) {
+          setTunnel(full)
+          setPort(full.ports?.[0]?.portNumber?.toString() || '')
+          setProtocol(full.ports?.[0]?.protocol || 'auto')
+          setDescription(full.description || '')
+        }
+      } catch (e) {
+      } finally {
+        if (active) setLoading(false)
       }
     }
     loadFull()
+    return () => { active = false }
   }, [tunnelId])
 
+  const handleCancel = useCallback(() => {
+    if (loading || saving) return
+    setDescription(tunnel.description || '')
+    setPort(tunnel.ports?.[0]?.portNumber?.toString() || '')
+    setProtocol(tunnel.ports?.[0]?.protocol || 'auto')
+    setEditing(false)
+  }, [tunnel, loading, saving])
+
   const handleSave = useCallback(async () => {
+    if (loading || saving) return
+    // 空端口仅保留原配置，不代表删除；非空端口必须在任何写入前校验。
+    const newPort = port === '' ? null : parsePort(port)
+    if (port !== '' && newPort === null) {
+      showToast('端口号必须是 1-65535 之间的整数', 'error')
+      return
+    }
     setSaving(true)
     try {
-      // 先获取当前真实的端口信息
       const current = await window.services.getTunnelWithPorts(tunnelId)
-      const oldPort = current?.ports?.[0]?.portNumber
+      if (!current) throw new Error('无法获取当前隧道配置，请重试')
+      const oldPort = current.ports?.[0]?.portNumber ? Number(current.ports[0].portNumber) : undefined
+      const oldProtocol = current.ports?.[0]?.protocol || 'auto'
 
-      // 更新描述
-      await window.services.updateTunnel(tunnelId, {
-        description: description || undefined
-      })
+      await checkWrite(window.services.updateTunnel(tunnelId, { description }))
 
-      // 更新端口（端口或协议变化都需要更新）
-      const newPort = port ? parsePort(port) : null
-      if (port && !newPort) {
-        showToast('端口号必须是 1-65535 之间的整数', 'error')
-        setSaving(false)
-        return
-      }
-      const oldProtocol = current?.ports?.[0]?.protocol || 'auto'
       if (newPort && (newPort !== oldPort || protocol !== oldProtocol)) {
-        if (oldPort) {
-          await window.services.deletePort(tunnelId, oldPort)
+        if (newPort === oldPort) {
+          // CLI 无端口更新接口；同端口改协议需重建，失败时恢复原协议。
+          await checkWrite(window.services.deletePort(tunnelId, oldPort))
+          try {
+            await checkWrite(window.services.addPort(tunnelId, newPort, protocol))
+          } catch (err) {
+            try {
+              await checkWrite(window.services.addPort(tunnelId, oldPort, oldProtocol))
+            } catch (restoreError) {
+              throw new Error(err.message + '；恢复原端口协议失败: ' + restoreError.message)
+            }
+            throw new Error(err.message + '；已恢复原端口协议')
+          }
+        } else {
+          // 不同端口先新增，避免新增失败时丢失原端口。
+          await checkWrite(window.services.addPort(tunnelId, newPort, protocol))
+          if (oldPort) {
+            try {
+              await checkWrite(window.services.deletePort(tunnelId, oldPort))
+            } catch (err) {
+              try {
+                await checkWrite(window.services.deletePort(tunnelId, newPort))
+              } catch (rollbackError) {
+                throw new Error(err.message + '；回滚新增端口失败: ' + rollbackError.message)
+              }
+              throw new Error(err.message + '；已撤回新增端口')
+            }
+          }
         }
-        await window.services.addPort(tunnelId, newPort, protocol)
       }
 
-      // 重新获取最新数据
       const full = await window.services.getTunnelWithPorts(tunnelId)
+      if (!full) throw new Error('配置可能已保存，但读取最新详情失败，请刷新确认')
       if (full) {
         setTunnel(full)
+        setDescription(full.description || '')
         setPort(full.ports?.[0]?.portNumber?.toString() || '')
         setProtocol(full.ports?.[0]?.protocol || 'auto')
       }
@@ -122,9 +170,10 @@ export default function TunnelDetail ({ tunnel: initialTunnel, onBack, showToast
       showToast('已保存', 'success')
     } catch (err) {
       showToast('保存失败: ' + err.message, 'error')
+    } finally {
+      setSaving(false)
     }
-    setSaving(false)
-  }, [tunnelId, description, port, protocol, showToast])
+  }, [tunnelId, description, port, protocol, loading, saving, showToast])
 
   const handleCopyUrl = useCallback(() => {
     if (!tunnelUrl) {
@@ -162,30 +211,24 @@ export default function TunnelDetail ({ tunnel: initialTunnel, onBack, showToast
       }
     }
 
-    const result = window.services.startHost(tunnelId, portNum, latestTunnel.anonymous === true)
+    const result = await window.services.startHost(tunnelId, portNum)
+    syncHostStatus()
     if (result.success) {
-      setRunning(true)
-      window.__runningTunnelId = tunnelId
       showToast('启动中...')
     } else {
-      // 启动失败时回滚文件服务器
-      if (latestDirProxyPath) window.services.stopFileServer()
       showToast('启动失败: ' + result.message, 'error')
     }
-  }, [tunnelId, tunnel, showToast])
+  }, [tunnelId, tunnel, showToast, syncHostStatus])
 
-  const handleStop = useCallback(() => {
-    // 代理目录隧道：同时停止文件服务器
-    if (dirProxyPath) window.services.stopFileServer()
-    const result = window.services.stopHost()
+  const handleStop = useCallback(async () => {
+    const result = await window.services.stopHost()
+    syncHostStatus()
     if (result.success) {
-      setRunning(false)
-      window.__runningTunnelId = null
       showToast('已停止', 'success')
     } else {
       showToast('停止失败: ' + result.message, 'error')
     }
-  }, [dirProxyPath, showToast])
+  }, [showToast, syncHostStatus])
 
   const formatTime = (d) => d instanceof Date ? d.toLocaleTimeString('zh-CN', { hour12: false }) : ''
 
@@ -208,8 +251,8 @@ export default function TunnelDetail ({ tunnel: initialTunnel, onBack, showToast
           {editing
             ? (
               <>
-                <button className='btn btn-ghost btn-sm' onClick={() => setEditing(false)}>取消</button>
-                <button className='btn btn-brand btn-sm' onClick={handleSave} disabled={saving}>
+                <button className='btn btn-ghost btn-sm' onClick={handleCancel} disabled={loading || saving}>取消</button>
+                <button className='btn btn-brand btn-sm' onClick={handleSave} disabled={loading || saving}>
                   {saving ? '保存中...' : '保存'}
                 </button>
               </>
@@ -227,7 +270,7 @@ export default function TunnelDetail ({ tunnel: initialTunnel, onBack, showToast
                       <Play size={13} /> 启动
                     </button>
                     )}
-                <button className='btn btn-ghost btn-sm' onClick={() => setEditing(true)}>编辑</button>
+                <button className='btn btn-ghost btn-sm' onClick={() => setEditing(true)} disabled={loading || saving}>编辑</button>
               </>
               )}
         </div>
@@ -253,11 +296,11 @@ export default function TunnelDetail ({ tunnel: initialTunnel, onBack, showToast
                 <>
                   <div className='info-item'>
                     <span className='info-label'>端口号</span>
-                    <input className='form-input' type='number' value={port} onChange={(e) => setPort(e.target.value)} placeholder='80、3000、8080...' min='1' max='65535' />
+                    <input className='form-input' type='number' disabled={loading || saving} value={port} onChange={(e) => setPort(e.target.value)} placeholder='80、3000、8080...' min='1' max='65535' />
                   </div>
                   <div className='info-item'>
                     <span className='info-label'>协议</span>
-                    <select className='form-select' value={protocol} onChange={(e) => setProtocol(e.target.value)}>
+                    <select className='form-select' disabled={loading || saving} value={protocol} onChange={(e) => setProtocol(e.target.value)}>
                       <option value='auto'>自动 (auto)</option>
                       <option value='http'>HTTP</option>
                       <option value='https'>HTTPS</option>
@@ -265,7 +308,7 @@ export default function TunnelDetail ({ tunnel: initialTunnel, onBack, showToast
                   </div>
                   <div className='info-item'>
                     <span className='info-label'>描述</span>
-                    <input className='form-input' type='text' value={description} onChange={(e) => setDescription(e.target.value)} placeholder='隧道用途说明' />
+                    <input className='form-input' type='text' disabled={loading || saving} value={description} onChange={(e) => setDescription(e.target.value)} placeholder='隧道用途说明' />
                   </div>
                 </>
                 )

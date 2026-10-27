@@ -28,6 +28,13 @@ export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onR
     try { window.services?.saveTabMemory?.('dashboard-tab', tab) } catch (e) {}
   }, [tab])
 
+  const syncHostStatus = useCallback(() => {
+    try {
+      const status = window.services?.getHostStatus()
+      setRunningTunnel(status?.running ? (window.__runningTunnelId || null) : null)
+    } catch (e) { setRunningTunnel(null) }
+  }, [])
+
   // 日志 + 事件监听
   useEffect(() => {
     const history = window.services?.getLogBuffer() || []
@@ -44,9 +51,8 @@ export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onR
       }
     }
     const onLoginCode = (e) => setLoginCode(e.detail)
-    const onExit = (e) => {
-      setRunningTunnel(null)
-      window.__runningTunnelId = null
+    const onExit = () => {
+      syncHostStatus()
       showToast('隧道已停止', 'info')
     }
     const onUrlReady = () => {
@@ -61,27 +67,20 @@ export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onR
     window.addEventListener('tunnel-login-done', onLoginDone)
     window.addEventListener('tunnel-login-code', onLoginCode)
     window.addEventListener('tunnel-exit', onExit)
+    window.addEventListener('tunnel-host-status', syncHostStatus)
     window.addEventListener('tunnel-url', onUrlReady)
     window.addEventListener('tunnel-error', onError)
+    syncHostStatus()
     return () => {
       window.removeEventListener('tunnel-log-entry', onEntry)
       window.removeEventListener('tunnel-login-done', onLoginDone)
       window.removeEventListener('tunnel-login-code', onLoginCode)
       window.removeEventListener('tunnel-exit', onExit)
+      window.removeEventListener('tunnel-host-status', syncHostStatus)
       window.removeEventListener('tunnel-url', onUrlReady)
       window.removeEventListener('tunnel-error', onError)
     }
-  }, [onLogin, showToast])
-
-  // 检查运行状态（进入时）
-  useEffect(() => {
-    try {
-      const status = window.services?.getHostStatus()
-      if (status?.running && window.__runningTunnelId) {
-        setRunningTunnel(window.__runningTunnelId)
-      }
-    } catch (e) {}
-  }, [])
+  }, [onLogin, showToast, syncHostStatus])
 
   useEffect(() => {
     if (tab === 'logs') logEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -149,31 +148,25 @@ export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onR
       }
     }
 
-    const result = window.services.startHost(latestTunnel.tunnelId, port, latestTunnel.anonymous === true)
+    const result = await window.services.startHost(latestTunnel.tunnelId, port)
+    syncHostStatus()
     if (result.success) {
-      setRunningTunnel(latestTunnel.tunnelId)
-      window.__runningTunnelId = latestTunnel.tunnelId // 持久化到全局
       showToast('启动中...')
     } else {
-      // 启动失败时回滚文件服务器
-      if ((latestTunnel.description || '').startsWith('代理目录: ')) window.services.stopFileServer()
       showToast('启动失败: ' + result.message, 'error')
     }
-  }, [showToast])
+  }, [showToast, syncHostStatus])
 
-  const handleStop = useCallback((e, tunnel) => {
+  const handleStop = useCallback(async (e) => {
     e.stopPropagation()
-    // 代理目录隧道：同时停止文件服务器
-    if ((tunnel?.description || '').startsWith('代理目录: ')) window.services.stopFileServer()
-    const result = window.services.stopHost()
+    const result = await window.services.stopHost()
+    syncHostStatus()
     if (result.success) {
-      setRunningTunnel(null)
-      window.__runningTunnelId = null // 清除全局状态
       showToast('已停止', 'success')
     } else {
       showToast('停止失败: ' + result.message, 'error')
     }
-  }, [showToast])
+  }, [showToast, syncHostStatus])
 
   const handleCopyUrl = useCallback((e, url) => {
     e.stopPropagation()

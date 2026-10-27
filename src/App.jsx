@@ -22,6 +22,7 @@ export default function App () {
   const lastRefreshRef = useRef(0)
   const lastLoginRefreshRef = useRef(0)
   const dataLoadedRef = useRef(false)
+  const tunnelRequestRef = useRef(0)
 
   const showToast = useCallback((msg, type = 'info') => {
     setToast({ msg, type })
@@ -71,17 +72,20 @@ export default function App () {
     const now = Date.now()
     if (!force && dataLoadedRef.current && now - lastRefreshRef.current < 30000) return
 
+    const request = ++tunnelRequestRef.current
     setLoading(true)
     try {
       if (!window.services) return
       const list = await window.services.listTunnels()
+      if (request !== tunnelRequestRef.current) return
       setTunnels(Array.isArray(list) ? list : [])
       lastRefreshRef.current = now
       dataLoadedRef.current = true
     } catch (e) {
-      setTunnels([])
+      if (request === tunnelRequestRef.current) setTunnels([])
+    } finally {
+      if (request === tunnelRequestRef.current) setLoading(false)
     }
-    setLoading(false)
   }, [])
 
   const forceRefresh = useCallback(async () => {
@@ -112,7 +116,8 @@ export default function App () {
       }
     })
     window.utools.onPluginOut(() => {
-      // uTools 插件隐藏时保留当前界面，避免再次进入时 DevTunnel 分区没有子视图可渲染。
+      // 隐藏前提交当前输入框，保留界面以便再次进入时恢复。
+      document.activeElement?.blur?.()
     })
   }, [loadLoginStatus, loadTunnels])
 
@@ -124,7 +129,8 @@ export default function App () {
   const goToDashboard = useCallback(() => {
     setView('dashboard')
     setSelectedTunnel(null)
-  }, [])
+    loadTunnels(true)
+  }, [loadTunnels])
 
   const handleCreated = useCallback((tunnel) => {
     setView('dashboard')
@@ -139,9 +145,15 @@ export default function App () {
     if (key === 'devtunnel') {
       setView('dashboard')
       setSelectedTunnel(null)
+      loadTunnels(true)
     } else {
       setView('')
     }
+  }, [loadTunnels])
+
+  const handleSettingsSelect = useCallback(() => {
+    setSection('settings')
+    setView('')
   }, [])
 
   const toggleSidebar = useCallback(() => {
@@ -188,12 +200,12 @@ export default function App () {
 
         {/* frp section */}
         {section === 'frp' && (
-          <FrpPage onToggleSidebar={toggleSidebar} showToast={showToast} />
+          <FrpPage onToggleSidebar={toggleSidebar} onOpenSettings={handleSettingsSelect} showToast={showToast} />
         )}
 
         {/* proxydir section */}
         {section === 'proxydir' && (
-          <ProxyDir onToggleSidebar={toggleSidebar} showToast={showToast} />
+          <ProxyDir onToggleSidebar={toggleSidebar} onOpenSettings={handleSettingsSelect} showToast={showToast} />
         )}
 
         {/* tutorial section */}

@@ -4,11 +4,12 @@ import ConfirmModal from '../ConfirmModal'
 import './index.css'
 
 function parsePort (value) {
+  if (!/^\d+$/.test(String(value))) return null
   const num = Number(value)
   return Number.isInteger(num) && num >= 1 && num <= 65535 ? num : null
 }
 
-export default function ProxyDir ({ onToggleSidebar, showToast }) {
+export default function ProxyDir ({ onToggleSidebar, onOpenSettings, showToast }) {
   const [mode, setMode] = useState('devtunnel') // 'devtunnel' | 'frp'
   const [dirPath, setDirPath] = useState('')
   const [port, setPort] = useState('3000')
@@ -17,8 +18,13 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
   const [loading, setLoading] = useState(false)
   const [tunnelUrl, setTunnelUrl] = useState('')
   const [error, setError] = useState('')
+  const [saveErrors, setSaveErrors] = useState({})
   const [serverInfo, setServerInfo] = useState(null)
   const tunnelIdRef = useRef(null)
+  const operationRef = useRef(false)
+  const awaitingConfirmRef = useRef(false)
+  const activeTunnelRef = useRef(null)
+  const activeFileModeRef = useRef(null)
 
   // 已有隧道确认弹窗
   const [existingTunnel, setExistingTunnel] = useState(null)
@@ -30,15 +36,15 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
   const [frpProxyType, setFrpProxyType] = useState('tcp') // 'tcp' | 'http'
   const [frpRemotePort, setFrpRemotePort] = useState('8080')
   const [frpDomain, setFrpDomain] = useState('')
+  const [frpRuntime, setFrpRuntime] = useState(null)
 
   // 加载 frp 配置和代理目录 frp 设置
   useEffect(() => {
+    let active = true
     const loadFrp = async () => {
       try {
         const saved = await window.services?.getFrpConfig?.()
-        if (saved?.server?.serverAddr) {
-          setFrpConfig(saved.server)
-        }
+        if (active) setFrpConfig(saved?.server || null)
       } catch (e) {}
     }
     // 加载代理目录 frp 模式的设置（本地存储）
@@ -51,30 +57,23 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
       }
     } catch (e) {}
     loadFrp()
+    return () => { active = false }
   }, [])
 
-  // 保存代理目录 frp 模式的设置（含当前 URL，本地存储）
-  const frpSettingsRef = useRef(null)
-  useEffect(() => {
-    // 跳过首次渲染
-    if (frpSettingsRef.current === null) {
-      frpSettingsRef.current = true
-      return
+  const saveSettings = useCallback((key, value, frp = false) => {
+    try {
+      if ((key === 'port' || key === 'remotePort') && !parsePort(value)) throw new Error('端口必须是 1-65535 之间的整数')
+      const services = window.services
+      const existing = frp ? services.getProxyDirFrpSettings() : services.getProxyDirSettings()
+      const settings = { ...existing, [key]: value }
+      const result = frp ? services.saveProxyDirFrpSettings(settings) : services.saveProxyDirSettings(settings)
+      if (result?.success === false) throw new Error(result.message || '保存失败')
+      setSaveErrors(prev => ({ ...prev, [key]: '' }))
+    } catch (error) {
+      setSaveErrors(prev => ({ ...prev, [key]: '设置未保存：' + error.message }))
+      showToast('设置保存失败：' + error.message, 'error')
     }
-    const timer = setTimeout(() => {
-      try {
-        const existing = window.services?.getProxyDirFrpSettings?.()
-        const existingUrl = existing?.url || ''
-        window.services?.saveProxyDirFrpSettings?.({
-          proxyType: frpProxyType,
-          remotePort: frpRemotePort,
-          domain: frpDomain,
-          url: tunnelUrl || existingUrl
-        })
-      } catch (e) {}
-    }, 500)
-    return () => clearTimeout(timer)
-  }, [frpProxyType, frpRemotePort, frpDomain, tunnelUrl])
+  }, [showToast])
 
   // 恢复运行状态和保存的目录
   useEffect(() => {
@@ -86,7 +85,7 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
         savedDirPath = savedDir.dirPath
         setDirPath(savedDir.dirPath)
       }
-      if (savedDir?.port) setPort(savedDir.port)
+      if (savedDir?.port !== undefined) setPort(savedDir.port)
       if (savedDir?.mode) setMode(savedDir.mode)
       if (savedDir?.allowAnonymous !== undefined) setAllowAnonymous(savedDir.allowAnonymous)
     } catch (e) {}
@@ -100,36 +99,26 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
       // frpc 模式运行中：恢复 mode 和 tunnelUrl
       setRunning(true)
       setMode('frp')
-      const dir = savedDirPath || '(已启动)'
+      activeFileModeRef.current = 'frp'
+      setFrpRuntime(frpcStatus)
+      const dir = fsStatus?.dir || savedDirPath || '(已启动)'
       setServerInfo({ port: fsStatus?.port || port, dir })
-      // 从保存的 frp 设置恢复 URL（本地存储）
-      try {
-        const frpSettings = window.services?.getProxyDirFrpSettings?.()
-        if (frpSettings?.url) {
-          setTunnelUrl(frpSettings.url)
-        }
-      } catch (e) {}
+      const proxy = frpcStatus.proxies?.[0]
+      if (proxy?.status === 'running') setTunnelUrl(proxy.type === 'tcp' ? frpcStatus.serverAddr + ':' + proxy.remotePort : 'http://' + proxy.customDomain)
     } else if (fsStatus?.running) {
       // 文件服务器运行中（代理目录 devtunnel 模式）
       setRunning(true)
-      setMode('devtunnel')
+      const activeMode = fsStatus.mode || 'devtunnel'
+      setMode(activeMode)
+      activeFileModeRef.current = activeMode
       setPort(String(fsStatus.port))
       setDirPath(fsStatus.dir)
       setServerInfo({ port: fsStatus.port, dir: fsStatus.dir })
-      // 恢复 tunnel URL：先从缓存获取，如果没有则从日志中提取
-      if (hostStatus?.running && window.__runningTunnelId) {
-        let cachedUrl = window.services?.getTunnelUrl(window.__runningTunnelId)
-        // 缓存没有时，从日志中提取
-        if (!cachedUrl) {
-          const logs = window.services?.getLogBuffer?.() || []
-          for (let i = logs.length - 1; i >= 0; i--) {
-            const matches = logs[i].text?.match(/https:\/\/\S+\.devtunnels\.ms/g)
-            if (matches?.length > 0) {
-              cachedUrl = matches.length > 1 ? matches[1] : matches[0]
-              break
-            }
-          }
-        }
+      // 恢复当前 Host 所属隧道的 URL 缓存，不从历史日志猜测。
+      if (activeMode === 'devtunnel' && hostStatus?.running && hostStatus.tunnelId) {
+        activeTunnelRef.current = hostStatus.tunnelId
+        activeFileModeRef.current = 'devtunnel'
+        const cachedUrl = window.services?.getTunnelUrl(hostStatus.tunnelId)
         if (cachedUrl) setTunnelUrl(cachedUrl)
       }
     }
@@ -137,17 +126,53 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
 
   // 监听隧道 URL 和退出事件（devtunnel 模式）
   useEffect(() => {
+    const syncHostStatus = (e) => {
+      const detail = e.detail || {}
+      const status = detail.host || detail.running !== undefined ? (detail.host || detail) : (window.services?.getHostStatus?.() || {})
+      const currentFile = detail.file || window.services?.getFileServerStatus?.()
+      if (status.running && currentFile?.running && currentFile.mode === 'devtunnel' && (status.tunnelId || window.services?.getHostStatus?.()?.tunnelId)) {
+        const tunnelId = status.tunnelId || window.services.getHostStatus().tunnelId
+        activeTunnelRef.current = tunnelId
+        tunnelIdRef.current = tunnelId
+        activeFileModeRef.current = 'devtunnel'
+        setMode('devtunnel')
+        setRunning(true)
+        if (currentFile?.running) {
+          setServerInfo({ port: currentFile.port, dir: currentFile.dir })
+        } else {
+          setServerInfo({ port, dir: dirPath || '(已启动)' })
+        }
+        const url = window.services?.getTunnelUrl?.(tunnelId)
+        setTunnelUrl(url || '')
+      } else if (!status.running && activeFileModeRef.current === 'devtunnel') {
+        setRunning(false)
+        setTunnelUrl('')
+        setServerInfo(null)
+        activeTunnelRef.current = null
+        activeFileModeRef.current = null
+      }
+    }
     const onUrl = (e) => {
-      if (mode !== 'devtunnel') return
-      setTunnelUrl(e.detail.url)
+      const detail = e.detail || {}
+      if (!activeTunnelRef.current && detail.tunnelId === (window.services?.getHostStatus?.()?.tunnelId || window.__runningTunnelId)) {
+        activeTunnelRef.current = detail.tunnelId
+      }
+      if (activeFileModeRef.current !== 'devtunnel' || !detail.tunnelId || detail.tunnelId !== activeTunnelRef.current) return
+      setTunnelUrl(detail.url)
       showToast('隧道已就绪')
     }
-    const onExit = () => {
+    const onExit = (e) => {
+      const detail = e.detail || {}
+      if (activeFileModeRef.current !== 'devtunnel') return
+      if (operationRef.current) return
+      if (detail.tunnelId && detail.tunnelId !== activeTunnelRef.current) return
       setRunning(false)
       setLoading(false)
       setTunnelUrl('')
       setServerInfo(null)
       tunnelIdRef.current = null
+      activeTunnelRef.current = null
+      activeFileModeRef.current = null
     }
     const onError = (e) => {
       if (mode !== 'devtunnel') return
@@ -155,10 +180,12 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
     }
 
     window.addEventListener('tunnel-url', onUrl)
+    window.addEventListener('tunnel-host-status', syncHostStatus)
     window.addEventListener('tunnel-exit', onExit)
     window.addEventListener('tunnel-error', onError)
     return () => {
       window.removeEventListener('tunnel-url', onUrl)
+      window.removeEventListener('tunnel-host-status', syncHostStatus)
       window.removeEventListener('tunnel-exit', onExit)
       window.removeEventListener('tunnel-error', onError)
     }
@@ -166,41 +193,55 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
 
   // 监听 frpc 事件（frp 模式，仅处理来自 proxydir 的）
   useEffect(() => {
+    const onFrpcStatus = (e) => {
+      const detail = e.detail || {}
+      if (detail.source !== 'proxydir') return
+      setFrpRuntime(detail)
+      if (detail.running) {
+        activeFileModeRef.current = 'frp'
+        setMode('frp')
+        setRunning(true)
+        const currentFile = detail.file || window.services?.getFileServerStatus?.()
+        setServerInfo({
+          port: currentFile?.port || port,
+          dir: currentFile?.dir || dirPath || '(已启动)'
+        })
+        const proxy = detail.proxies?.[0]
+        setTunnelUrl(proxy?.status === 'running' ? (proxy.type === 'tcp' ? detail.serverAddr + ':' + proxy.remotePort : 'http://' + proxy.customDomain) : '')
+        if (proxy?.status === 'error') setError(proxy.message || '代理注册失败，请查看日志')
+      } else if (activeFileModeRef.current === 'frp') {
+        setRunning(false)
+        setServerInfo(null)
+        setTunnelUrl('')
+        activeFileModeRef.current = null
+      }
+    }
     const onFrpcExit = (e) => {
       const detail = e.detail || {}
       const source = detail.source || e.source
-      if (source && source !== 'proxydir') return
+      if (source !== 'proxydir' || operationRef.current) return
       setRunning(false)
       setLoading(false)
       setServerInfo(null)
+      setTunnelUrl('')
+      activeFileModeRef.current = null
     }
     const onFrpcError = (e) => {
       const detail = e.detail || {}
       const source = detail.source || e.source
-      if (source && source !== 'proxydir') return
+      if (source !== 'proxydir') return
       const msg = detail.message || detail || '未知错误'
       setError('frpc 错误: ' + msg)
+      setRunning(Boolean(window.services?.getFrpcStatus?.()?.running))
       showToast('frpc 错误: ' + msg, 'error')
     }
-    const onFrpcLog = (e) => {
-      const detail = e.detail || {}
-      const source = detail.source || e.source
-      if (source && source !== 'proxydir') return
-      // 从日志中提取访问地址
-      const text = detail.text || detail || ''
-      const domainMatch = text.match(/custom domain \[(\S+)\]/i)
-      if (domainMatch) {
-        setTunnelUrl('http://' + domainMatch[1])
-      }
-    }
-
+    window.addEventListener('frpc-status', onFrpcStatus)
     window.addEventListener('frpc-exit', onFrpcExit)
     window.addEventListener('frpc-error', onFrpcError)
-    window.addEventListener('frpc-log', onFrpcLog)
     return () => {
+      window.removeEventListener('frpc-status', onFrpcStatus)
       window.removeEventListener('frpc-exit', onFrpcExit)
       window.removeEventListener('frpc-error', onFrpcError)
-      window.removeEventListener('frpc-log', onFrpcLog)
     }
   }, [showToast, mode])
 
@@ -209,12 +250,17 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
     if (dir) {
       setDirPath(dir)
       setError('')
-      // 保存目录到本地存储
-      try {
-        window.services?.saveProxyDirSettings?.({ dirPath: dir, port, mode, allowAnonymous })
-      } catch (e) {}
+      saveSettings('dirPath', dir)
     }
-  }, [port, mode, allowAnonymous])
+  }, [saveSettings])
+
+  const stopCurrentHost = () => {
+    const status = window.services.getHostStatus()
+    if (!status?.running) return null
+    return window.services.stopHost().then(result => {
+      if (!result?.success) throw new Error(result?.message || '停止现有隧道失败')
+    })
+  }
 
   // 检查是否有已存在的隧道
   // 返回：{ tunnel, matchType } 或 null
@@ -271,16 +317,17 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
 
   // 启用已有隧道（处理 sameDir 和 samePort 两种情况）
   const handleUseExisting = useCallback(async () => {
+    if (operationRef.current && !awaitingConfirmRef.current) return
+    operationRef.current = true
     setShowConfirm(false)
-    if (!existingTunnel) return
+    awaitingConfirmRef.current = false
+    if (!existingTunnel) { operationRef.current = false; return }
 
     setLoading(true)
     try {
       // 0. 先停止已有的隧道进程
-      const hostStatus = window.services.getHostStatus()
-      if (hostStatus.running) {
-        window.services.stopHost()
-      }
+      const stopPromise = stopCurrentHost()
+      if (stopPromise) await stopPromise
 
       // 1. 启动本地文件服务器
       const targetPort = parsePort(port)
@@ -296,15 +343,23 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
         setLoading(false)
         return
       }
+      activeFileModeRef.current = 'devtunnel'
 
       const tid = existingTunnel.tunnelId
-      // 2. sameDir：更新端口（删除旧端口，添加新端口）
+      // 2. sameDir：先新增端口，删除旧端口失败时撤回新增端口。
       if (matchType === 'sameDir') {
         const oldPort = existingTunnel.ports?.[0]?.portNumber
+        await window.services.addPort(tid, targetPort, 'auto')
         if (oldPort) {
-          try { await window.services.deletePort(tid, oldPort) } catch (e) {}
+          try {
+            await window.services.deletePort(tid, oldPort)
+          } catch (deleteError) {
+            try { await window.services.deletePort(tid, targetPort) } catch (rollbackError) {
+              throw new Error(deleteError.message + '；回滚新增端口失败: ' + rollbackError.message)
+            }
+            throw deleteError
+          }
         }
-        try { await window.services.addPort(tid, targetPort, 'auto') } catch (e) {}
       }
 
       // 3. 同步描述和匿名访问策略
@@ -320,8 +375,9 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
       }
 
       // 4. 启动隧道
-      const hostResult = window.services.startHost(tid, targetPort, allowAnonymous)
-      if (!hostResult.success) {
+      activeTunnelRef.current = tid
+      const hostResult = await window.services.startHost(tid, targetPort)
+      if (!hostResult?.success) {
         setError(hostResult.message)
         window.services.stopFileServer()
         setLoading(false)
@@ -333,19 +389,21 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
         window.services?.saveProxyDirLastTunnel?.({ port: targetPort, tunnelId: tid })
       } catch (e) {}
 
-      window.__runningTunnelId = tid
       tunnelIdRef.current = tid
       setRunning(true)
+      activeFileModeRef.current = 'devtunnel'
       setServerInfo({ port: targetPort, dir: dirPath })
       window.services?.addProxyDirLog?.('system', '[代理目录] devtunnel 模式启动: ' + dirPath + ' -> 端口 ' + port, 'devtunnel')
       showToast('正在启动...')
     } catch (err) {
       setError(err.message || '启动失败')
       window.services.stopFileServer()
+    } finally {
+      setLoading(false)
+      setExistingTunnel(null)
+      setMatchType('')
+      operationRef.current = false
     }
-    setLoading(false)
-    setExistingTunnel(null)
-    setMatchType('')
   }, [existingTunnel, matchType, dirPath, port, allowAnonymous, showToast])
 
   // 实际创建隧道的逻辑
@@ -353,10 +411,8 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
     setLoading(true)
     try {
       // 0. 先停止已有的隧道进程
-      const hostStatus = window.services.getHostStatus()
-      if (hostStatus.running) {
-        window.services.stopHost()
-      }
+      const stopPromise = stopCurrentHost()
+      if (stopPromise) await stopPromise
 
       // 1. 启动本地文件服务器（等待端口真正监听）
       const targetPort = parsePort(port)
@@ -382,11 +438,13 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
       })
 
       const tid = tunnel.tunnelId || tunnel.tunnel_id || tunnel.id
+      await window.services.updateTunnel(tid, { anonymous: allowAnonymous })
       tunnelIdRef.current = tid
 
       // 3. 启动隧道
-      const hostResult = window.services.startHost(tid, targetPort, allowAnonymous)
-      if (!hostResult.success) {
+      activeTunnelRef.current = tid
+      const hostResult = await window.services.startHost(tid, targetPort)
+      if (!hostResult?.success) {
         setError(hostResult.message)
         window.services.stopFileServer()
         setLoading(false)
@@ -398,8 +456,8 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
         window.services?.saveProxyDirLastTunnel?.({ port: targetPort, tunnelId: tid })
       } catch (e) {}
 
-      window.__runningTunnelId = tid
       setRunning(true)
+      activeFileModeRef.current = 'devtunnel'
       setServerInfo({ port: targetPort, dir: dirPath })
       window.services?.addProxyDirLog?.('system', '[代理目录] devtunnel 模式启动: ' + dirPath + ' -> 端口 ' + port, 'devtunnel')
       showToast('正在启动...')
@@ -414,10 +472,8 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
   const handleDirectReuse = useCallback(async (tunnel) => {
     setLoading(true)
     try {
-      const hostStatus = window.services.getHostStatus()
-      if (hostStatus.running) {
-        window.services.stopHost()
-      }
+      const stopPromise = stopCurrentHost()
+      if (stopPromise) await stopPromise
 
       const targetPort = parsePort(port)
       if (!targetPort) {
@@ -442,8 +498,9 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
         setLoading(false)
         return
       }
-      const hostResult = window.services.startHost(tid, targetPort, allowAnonymous)
-      if (!hostResult.success) {
+      activeTunnelRef.current = tid
+      const hostResult = await window.services.startHost(tid, targetPort)
+      if (!hostResult?.success) {
         setError(hostResult.message)
         window.services.stopFileServer()
         setLoading(false)
@@ -454,9 +511,9 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
         window.services?.saveProxyDirLastTunnel?.({ port: targetPort, tunnelId: tid })
       } catch (e) {}
 
-      window.__runningTunnelId = tid
       tunnelIdRef.current = tid
       setRunning(true)
+      activeFileModeRef.current = 'devtunnel'
       setServerInfo({ port: targetPort, dir: dirPath })
       window.services?.addProxyDirLog?.('system', '[代理目录] devtunnel 模式启动: ' + dirPath + ' -> 端口 ' + port, 'devtunnel')
       showToast('正在启动...')
@@ -472,9 +529,10 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
     showToast('正在检查隧道配置，请耐心等待...')
     try {
       // 先检查是否有已存在的隧道
+      const stopPromise = stopCurrentHost()
+      if (stopPromise) await stopPromise
       const result = await checkExistingTunnel()
       if (result) {
-        setLoading(false)
         // 同目录+同端口：直接复用，不弹窗
         if (result.matchType === 'same') {
           await handleDirectReuse(result.tunnel)
@@ -483,6 +541,7 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
         // 同目录+不同端口 或 同端口+不同目录：弹窗确认
         setExistingTunnel(result.tunnel)
         setMatchType(result.matchType)
+        awaitingConfirmRef.current = true
         setShowConfirm(true)
         return
       }
@@ -495,8 +554,15 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
   }, [checkExistingTunnel, doStartDevtunnel, handleDirectReuse, showToast])
 
   const handleStartFrp = useCallback(async () => {
-    if (!frpConfig?.serverAddr) {
-      setError('请先在「Frp 内网穿透」页面配置服务器')
+    // 启动前重读共享配置；预检失败不进入会清理文件服务器的启动分支。
+    let server
+    try {
+      const latest = await window.services.getFrpConfig()
+      server = latest?.server
+      setFrpConfig(server || null)
+      if (!server?.serverAddr) throw new Error('请先在「设置」中配置 FRP 服务器')
+    } catch (error) {
+      setError(error.message || '读取 FRP 配置失败')
       return
     }
     if (frpProxyType === 'http' && !frpDomain) {
@@ -517,6 +583,8 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
     setLoading(true)
     try {
       // 1. 启动本地文件服务器（等待端口真正监听）
+      const stopPromise = stopCurrentHost()
+      if (stopPromise) await stopPromise
       const fsResult = await window.services.startFileServer(dirPath, targetPort, 'frp')
       if (!fsResult.success) {
         setError(fsResult.message)
@@ -532,75 +600,91 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
         remotePort: frpProxyType === 'tcp' ? remotePort : undefined,
         customDomain: frpProxyType === 'http' ? frpDomain : undefined
       }
-      const result = window.services.startFrpc(frpConfig, [proxyConfig], 'proxydir')
-      if (!result.success) {
+      activeFileModeRef.current = 'frp'
+      const result = await window.services.startFrpc(server, [proxyConfig], 'proxydir')
+      if (!result?.success) {
         setError(result.message)
         window.services.stopFileServer('frp')
         setLoading(false)
         return
       }
 
+      const runtime = window.services.getFrpcStatus()
+      setFrpRuntime(runtime)
+      if (!runtime.running) throw new Error('frpc 已退出，请查看日志')
       setRunning(true)
+      activeFileModeRef.current = 'frp'
       setServerInfo({ port: targetPort, dir: dirPath })
-      let url = ''
-      if (frpProxyType === 'tcp') {
-        url = frpConfig.serverAddr + ':' + frpRemotePort
-      } else {
-        url = 'http://' + frpDomain
-      }
-      setTunnelUrl(url)
-
-      // 主动保存 frp 设置（确保重启后能恢复 URL，本地存储）
-      try {
-        window.services?.saveProxyDirFrpSettings?.({
-          proxyType: frpProxyType,
-          remotePort: frpRemotePort,
-          domain: frpDomain,
-          url
-        })
-      } catch (e) {}
 
       window.services?.addProxyDirLog?.('system', '[代理目录] frp 模式启动: ' + dirPath + ' -> 端口 ' + port, 'frp')
       showToast('正在启动 frpc...')
     } catch (err) {
       setError(err.message || '启动失败')
       window.services.stopFileServer('frp')
+      setRunning(Boolean(window.services.getFrpcStatus().running))
     }
     setLoading(false)
-  }, [dirPath, port, frpConfig, frpProxyType, frpRemotePort, frpDomain, showToast])
+  }, [dirPath, port, frpProxyType, frpRemotePort, frpDomain, showToast])
 
   const handleCancelConfirm = useCallback(() => {
     setShowConfirm(false)
+    awaitingConfirmRef.current = false
     setExistingTunnel(null)
     setMatchType('')
+    operationRef.current = false
+    setLoading(false)
   }, [])
 
   const handleStart = useCallback(async () => {
+    if (operationRef.current) return
+    operationRef.current = true
     setError('')
-    if (!dirPath) { setError('请选择要代理的目录'); return }
-    if (!parsePort(port)) { setError('请输入有效端口号 (1-65535)'); return }
+    setLoading(true)
+    try {
+      if (!dirPath) { setError('请选择要代理的目录'); return }
+      if (!parsePort(port)) { setError('请输入有效端口号 (1-65535)'); return }
 
-    if (mode === 'frp') {
-      await handleStartFrp()
-    } else {
-      await handleStartDevtunnel()
+      if (mode === 'frp') {
+        await handleStartFrp()
+      } else {
+        await handleStartDevtunnel()
+      }
+    } finally {
+      if (!awaitingConfirmRef.current) {
+        operationRef.current = false
+        setLoading(false)
+      }
     }
-  }, [dirPath, port, allowAnonymous, mode, frpConfig, frpDomain, handleStartFrp, handleStartDevtunnel, showToast])
+  }, [dirPath, port, mode, handleStartFrp, handleStartDevtunnel])
 
-  const handleStop = useCallback(() => {
-    window.services?.addProxyDirLog?.('system', '[代理目录] 停止代理 (' + mode + ' 模式)', mode)
-    if (mode === 'frp') {
-      window.services.stopFrpc()
-    } else {
-      window.services.stopHost()
-      window.__runningTunnelId = null
+  const handleStop = useCallback(async () => {
+    if (operationRef.current) return
+    operationRef.current = true
+    setLoading(true)
+    const runningMode = activeFileModeRef.current || mode
+    try {
+      window.services?.addProxyDirLog?.('system', '[代理目录] 停止代理 (' + runningMode + ' 模式)', runningMode)
+      const result = runningMode === 'frp'
+        ? await window.services.stopFrpc('proxydir')
+        : await window.services.stopHost()
+      if (!result?.success) {
+        setError(result?.message || '停止失败')
+        return
+      }
+      window.services.stopFileServer(runningMode)
+      setRunning(false)
+      setTunnelUrl('')
+      setServerInfo(null)
+      tunnelIdRef.current = null
+      activeTunnelRef.current = null
+      activeFileModeRef.current = null
+      showToast('已停止', 'success')
+    } catch (err) {
+      setError(err.message || '停止失败')
+    } finally {
+      operationRef.current = false
+      setLoading(false)
     }
-    window.services.stopFileServer(mode)
-    setRunning(false)
-    setTunnelUrl('')
-    setServerInfo(null)
-    tunnelIdRef.current = null
-    showToast('已停止', 'success')
   }, [mode, showToast])
 
   const handleCopyUrl = useCallback(() => {
@@ -633,6 +717,8 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
       </div>
 
       <div className='page'>
+        <div className='form-hint'>输入框失焦时保存设置，选项修改后立即保存。</div>
+        {Object.values(saveErrors).some(Boolean) && <div role='alert' style={{ color: 'var(--red)' }}>{Object.values(saveErrors).filter(Boolean).join('；')}</div>}
         {/* 模式选择（未运行时显示） */}
         {!running && (
           <div className='card mode-card'>
@@ -642,7 +728,8 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
             <div className='mode-options'>
               <button
                 className={`mode-option ${mode === 'devtunnel' ? 'active' : ''}`}
-                onClick={() => setMode('devtunnel')}
+                disabled={loading}
+                onClick={() => { setMode('devtunnel'); saveSettings('mode', 'devtunnel') }}
               >
                 <span className='mode-option-icon'><Globe size={18} /></span>
                 <div>
@@ -652,7 +739,8 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
               </button>
               <button
                 className={`mode-option ${mode === 'frp' ? 'active' : ''}`}
-                onClick={() => setMode('frp')}
+                disabled={loading}
+                onClick={() => { setMode('frp'); saveSettings('mode', 'frp') }}
               >
                 <span className='mode-option-icon'><Link2 size={18} /></span>
                 <div>
@@ -668,7 +756,7 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
         {running && serverInfo && (
           <div className='card status-card'>
             <div className='status-header'>
-              <span className='status-dot'>运行中</span>
+              <span className='status-dot'>{mode !== 'frp' || frpRuntime?.state === 'running' ? '运行中' : frpRuntime?.state === 'error' ? '代理注册失败' : frpRuntime?.state === 'stopping' ? '正在停止' : '启动中'}</span>
               <span className='badge badge-blue'>{mode === 'frp' ? 'Frp' : 'DevTunnel'}</span>
             </div>
             <div className='status-info'>
@@ -692,8 +780,14 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
                   <button className='btn btn-ghost btn-sm' onClick={handleOpenBrowser}><Globe size={13} /> 浏览器打开</button>
                 </>
               )}
-              <button className='btn btn-warning btn-sm' onClick={handleStop}><Square size={13} /> 停止代理</button>
+              <button className='btn btn-warning btn-sm' disabled={loading} onClick={handleStop}><Square size={13} /> 停止代理</button>
             </div>
+          </div>
+        )}
+
+        {running && error && (
+          <div className='card' style={{ borderLeft: '3px solid var(--red)', color: 'var(--red)', fontSize: 13 }}>
+            {error}
           </div>
         )}
 
@@ -712,10 +806,12 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
                     className='form-input dir-input'
                     type='text'
                     value={dirPath}
+                    disabled={loading}
                     onChange={(e) => { setDirPath(e.target.value); setError('') }}
+                    onBlur={e => saveSettings('dirPath', e.target.value)}
                     placeholder='选择或输入要分享的本地目录路径'
                   />
-                  <button className='btn btn-ghost' onClick={handleSelectDir}>浏览</button>
+                  <button className='btn btn-ghost' disabled={loading} onClick={handleSelectDir}>浏览</button>
                 </div>
                 <div className='form-hint'>选择要通过隧道暴露的本地文件夹</div>
               </div>
@@ -724,9 +820,11 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
                 <label className='form-label'>端口号 *</label>
                 <input
                   className='form-input port-input'
+                  disabled={loading}
                   type='number'
                   value={port}
                   onChange={(e) => setPort(e.target.value)}
+                  onBlur={e => saveSettings('port', e.target.value)}
                   placeholder='3000'
                   min='1'
                   max='65535'
@@ -737,7 +835,7 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
               {mode === 'devtunnel' && (
                 <>
                   <label className='form-checkbox'>
-                    <input type='checkbox' checked={allowAnonymous} onChange={(e) => setAllowAnonymous(e.target.checked)} />
+                    <input type='checkbox' disabled={loading} checked={allowAnonymous} onChange={(e) => { setAllowAnonymous(e.target.checked); saveSettings('allowAnonymous', e.target.checked) }} />
                     允许匿名访问
                   </label>
                   <div className='form-hint' style={{ marginLeft: 26 }}>开启后任何人可通过 URL 访问文件</div>
@@ -750,7 +848,7 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
                     ? (
                       <div className='frp-hint-box'>
                         <Server size={14} />
-                        <span>请先到「Frp 内网穿透」页面配置服务器</span>
+                        <span>请先在设置中配置 FRP 服务器</span>
                       </div>
                       )
                     : (
@@ -762,18 +860,21 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
                       </div>
                       )}
 
+                  <button className='btn btn-ghost btn-sm' disabled={loading} onClick={onOpenSettings}>前往设置</button>
                   <div className='form-group' style={{ marginTop: 12 }}>
                     <label className='form-label'>代理类型</label>
                     <div className='frp-type-options'>
                       <button
                         className={`frp-type-btn ${frpProxyType === 'tcp' ? 'active' : ''}`}
-                        onClick={() => setFrpProxyType('tcp')}
+                        disabled={loading}
+                        onClick={() => { setFrpProxyType('tcp'); saveSettings('proxyType', 'tcp', true) }}
                       >
                         TCP 端口
                       </button>
                       <button
                         className={`frp-type-btn ${frpProxyType === 'http' ? 'active' : ''}`}
-                        onClick={() => setFrpProxyType('http')}
+                        disabled={loading}
+                        onClick={() => { setFrpProxyType('http'); saveSettings('proxyType', 'http', true) }}
                       >
                         HTTP 域名
                       </button>
@@ -785,9 +886,11 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
                       <label className='form-label'>远程端口 *</label>
                       <input
                         className='form-input port-input'
+                        disabled={loading}
                         type='number'
                         value={frpRemotePort}
                         onChange={(e) => setFrpRemotePort(e.target.value)}
+                        onBlur={e => saveSettings('remotePort', e.target.value, true)}
                         placeholder='8080'
                         min='1'
                         max='65535'
@@ -801,9 +904,11 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
                       <label className='form-label'>自定义域名 *</label>
                       <input
                         className='form-input'
+                        disabled={loading}
                         type='text'
                         value={frpDomain}
                         onChange={(e) => setFrpDomain(e.target.value)}
+                        onBlur={e => saveSettings('domain', e.target.value, true)}
                         placeholder='files.your-server.com'
                       />
                       <div className='form-hint'>需要在 frps 配置泛域名解析，通过此域名访问文件</div>
@@ -865,7 +970,7 @@ export default function ProxyDir ({ onToggleSidebar, showToast }) {
 
             {/* 启动按钮 */}
             <button className='btn btn-brand btn-block' onClick={handleStart} disabled={loading}>
-              {loading ? <><span className='spinner' /> 启动中...</> : <><Play size={14} /> 启动代理</>}
+              {loading && !awaitingConfirmRef.current ? <><span className='spinner' /> 启动中...</> : <><Play size={14} /> 启动代理</>}
             </button>
           </>
         )}

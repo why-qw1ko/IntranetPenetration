@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from 'react'
 import './index.css'
 
 function parsePort (value) {
+  if (!/^\d+$/.test(String(value))) return null
   const num = Number(value)
   return Number.isInteger(num) && num >= 1 && num <= 65535 ? num : null
 }

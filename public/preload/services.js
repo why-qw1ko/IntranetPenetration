@@ -3,36 +3,32 @@ const http = require('http')
 const path = require('path')
 const fs = require('fs')
 const os = require('os')
+const { getLocal, setLocal, removeLocal } = require('./storage')(window.utools)
+const { validateServer, validateProxies, generateFrpcConfig } = require('./frp')
+const { watchOutput, stopProcess } = require('./process-utils')
+const frpcController = require('./frpc')({
+  spawn, platform: process.platform,
+  getPath: () => window.services.getFrpcPath(),
+  generateConfig: (...args) => window.services.generateFrpcConfig(...args),
+  log: addFrpcLog, emit: dispatchFrpcEvent,
+  stopFileServer: mode => window.services.stopFileServer(mode)
+})
 
 // TextDecoder 替代 iconv-lite，无需第三方依赖
+const utf8Decoder = new TextDecoder('utf-8', { fatal: true })
 let gbkDecoder = null
 try { gbkDecoder = new TextDecoder('gbk') } catch (e) {}
 
 const DEFAULT_DEVTUNNEL_PATH = path.join(os.homedir(), 'devtunnel', 'devtunnel.exe')
 
-// ==================== 本地存储辅助（不同步到云端） ====================
-
-function getLocal (key, defaultValue) {
-  try {
-    const val = window.utools.dbStorage.getItem(key)
-    return val !== null && val !== undefined ? val : defaultValue
-  } catch (e) { return defaultValue }
-}
-
-function setLocal (key, value) {
-  try { window.utools.dbStorage.setItem(key, value) } catch (e) {}
-}
-
-function removeLocal (key) {
-  try { window.utools.dbStorage.removeItem(key) } catch (e) {}
-}
+// dbStorage 也会同步，本机设置由 storage 按设备 ID 隔离。
 
 // 从云同步 db 迁移数据到本地存储（一次性）
 function migrateIfNeeded () {
   // 迁移 devtunnel-config.path
   try {
     const doc = window.utools.db.get('devtunnel-config')
-    if (doc && doc.path) {
+    if (doc && doc.path && !getLocal('devtunnel-path', '') && fs.existsSync(doc.path)) {
       setLocal('devtunnel-path', doc.path)
       delete doc.path
       window.utools.db.put(doc)
@@ -42,7 +38,7 @@ function migrateIfNeeded () {
   // 迁移 frp-config.frpcPath
   try {
     const doc = window.utools.db.get('frp-config')
-    if (doc && doc.frpcPath) {
+    if (doc && doc.frpcPath && !getLocal('frpc-path', '') && fs.existsSync(doc.frpcPath)) {
       setLocal('frpc-path', doc.frpcPath)
       delete doc.frpcPath
       try { window.utools.db.put(doc) } catch (e2) {}
@@ -53,7 +49,7 @@ function migrateIfNeeded () {
   try {
     const doc = window.utools.db.get('frp-config')
     if (doc?.server?.token) {
-      setLocal('frp-token', doc.server.token)
+      if (!getLocal('frp-token', '')) setLocal('frp-token', doc.server.token)
       delete doc.server.token
       try { window.utools.db.put(doc) } catch (e2) {}
     }
@@ -94,6 +90,7 @@ function migrateIfNeeded () {
         const localDoc = { ...doc }
         delete localDoc._id
         delete localDoc._rev
+        if (localDoc.dirPath && !fs.existsSync(localDoc.dirPath)) localDoc.dirPath = ''
         setLocal(key, localDoc)
         window.utools.db.remove(doc)
       }
@@ -103,14 +100,13 @@ function migrateIfNeeded () {
 
 let hostProcess = null
 let hostPid = null
+let hostTunnelId = null
 let logBuffer = []
-let configCache = null
+let hostStopping = null
 let fileServer = null
 let fileServerPort = null
 let fileServerDir = null
-let frpcProcess = null
-let frpcPid = null
-let frpcSource = '' // 记录是谁启动的 frpc ('frp' | 'proxydir')
+let fileServerMode = null
 let frpcLogBuffer = []
 
 // ==================== 初始化 ====================
@@ -149,10 +145,9 @@ function saveFrpcLogs () {
   }, 1000)
 }
 
-// 获取配置（带缓存）
+// 每次读取云同步配置，避免其他设备更新后仍使用旧默认值
 // path 从本地存储读取（本机特有），default* 从云同步 db 读取
 function getConfig () {
-  if (configCache) return configCache
   const localPath = getLocal('devtunnel-path', '')
   let defaults = { defaultPort: '80', defaultProtocol: 'auto', defaultAnonymous: true }
   try {
@@ -165,11 +160,10 @@ function getConfig () {
       }
     }
   } catch (e) {}
-  configCache = {
+  return {
     path: localPath || DEFAULT_DEVTUNNEL_PATH,
     ...defaults
   }
-  return configCache
 }
 
 function getDevTunnelPath () {
@@ -180,7 +174,8 @@ function getDevTunnelPath () {
 
 function decodeOutput (buffer) {
   if (Buffer.isBuffer(buffer)) {
-    // Windows 中文系统默认 GBK，优先用 GBK 解码，否则 UTF-8
+    // CLI 正常输出为 UTF-8；仅对 Windows 本地编码错误回退 GBK。
+    try { return utf8Decoder.decode(buffer) } catch (e) {}
     if (gbkDecoder) {
       try { return gbkDecoder.decode(buffer) } catch (e) {}
     }
@@ -254,19 +249,14 @@ function tomlString (value) {
 }
 
 function toPortNumber (value, fallback) {
-  const num = Number(value || fallback)
-  if (!Number.isInteger(num) || num < 1 || num > 65535) {
-    throw new Error('端口号必须是 1-65535 之间的整数')
-  }
+  const input = value === undefined || value === '' ? fallback : value
+  const num = Number(input)
+  if (!/^[0-9]+$/.test(String(input)) || !Number.isInteger(num) || num < 1 || num > 65535) throw new Error('端口号必须是 1-65535 之间的整数')
   return num
 }
 
 function hasAnonymousConnectAccess (text) {
   return /\+Anonymous\s*\[[^\]]*\bconnect\b[^\]]*\]/i.test(String(text || ''))
-}
-
-function maskFrpcConfig (content) {
-  return content.replace(/auth\.token\s*=\s*".*"/g, 'auth.token = "******"')
 }
 
 function extractDevTunnelUrls (text) {
@@ -495,7 +485,7 @@ function normalizeTunnel (tunnel) {
   return {
     ...tunnel,
     tunnelId,
-    description: tunnel.description || tunnel.desc || tunnel.descriptionText || '',
+    description: tunnel.description ?? tunnel.desc ?? tunnel.descriptionText ?? '',
     ports
   }
 }
@@ -583,32 +573,7 @@ function parseTunnelDetailFromText (text, fallbackTunnelId = '') {
 async function setAnonymousAccess (tunnelId, allow) {
   const id = normalizeTunnelId(tunnelId)
   if (!id) throw new Error('缺少有效的隧道 ID')
-  const listArgs = ['access', 'list', id]
-  addLog('system', formatCommand('devtunnel', listArgs))
-  const listResult = await runCommand(listArgs)
-  if (listResult) addLog('stdout', listResult)
-
-  if (allow) {
-    if (hasAnonymousConnectAccess(listResult)) return
-    const args = ['access', 'create', id, '--anonymous', '--scopes', 'connect']
-    addLog('system', formatCommand('devtunnel', args))
-    const result = await runCommand(args)
-    if (result) addLog('stdout', result)
-    return
-  }
-
-  const anonymousIndexes = []
-  for (const line of String(listResult || '').split(/\r?\n/)) {
-    const match = line.match(/^\s*(\d+):\s*\+Anonymous\s*\[[^\]]*\bconnect\b[^\]]*\]/i)
-    if (match) anonymousIndexes.push(Number(match[1]))
-  }
-  anonymousIndexes.sort((a, b) => b - a)
-  for (const index of anonymousIndexes) {
-    const args = ['access', 'delete', id, '--index', String(index)]
-    addLog('system', formatCommand('devtunnel', args))
-    const result = await runCommand(args)
-    if (result) addLog('stdout', result)
-  }
+  await require('./devtunnel-access')(runCommand, parsePortsFromText, id, allow)
 }
 
 // ==================== 服务 ====================
@@ -620,21 +585,20 @@ window.services = {
 
   saveConfig (config) {
     try {
-      configCache = null // 清除缓存
-      // path 保存到本地存储（本机特有）
-      if (config.path !== undefined) {
-        setLocal('devtunnel-path', config.path)
-      }
-      // default* 保存到云同步 db（可跨设备）
-      const cloudDoc = { _id: 'devtunnel-config' }
-      try {
+      const fields = ['path', 'defaultPort', 'defaultProtocol', 'defaultAnonymous']
+      if (!config || Object.keys(config).some(key => !fields.includes(key))) throw new Error('不支持的配置字段')
+      if (config.path !== undefined && typeof config.path !== 'string') throw new Error('路径必须是字符串')
+      if (config.defaultPort !== undefined) toPortNumber(config.defaultPort)
+      if (config.defaultProtocol !== undefined && !['auto', 'http', 'https'].includes(config.defaultProtocol)) throw new Error('默认协议无效')
+      if (config.defaultAnonymous !== undefined && typeof config.defaultAnonymous !== 'boolean') throw new Error('匿名访问设置必须是布尔值')
+      const patch = Object.fromEntries(fields.slice(1).filter(key => config[key] !== undefined).map(key => [key, config[key]]))
+      if (Object.keys(patch).length) {
         const existing = window.utools.db.get('devtunnel-config')
-        cloudDoc._rev = existing._rev
-      } catch (e) {}
-      cloudDoc.defaultPort = config.defaultPort
-      cloudDoc.defaultProtocol = config.defaultProtocol
-      cloudDoc.defaultAnonymous = config.defaultAnonymous
-      window.utools.db.put(cloudDoc)
+        const result = window.utools.db.put({ ...existing, ...patch, _id: 'devtunnel-config' })
+        if (result?.ok !== true) throw new Error(result?.message || '保存配置失败')
+      }
+      // 云端写入失败时不提前更改本机路径；仅改路径不触碰云端默认值。
+      if (config.path !== undefined) setLocal('devtunnel-path', config.path.trim())
       return { success: true }
     } catch (e) {
       return { success: false, message: e.message }
@@ -715,13 +679,9 @@ window.services = {
         }
       }
 
-      child.stdout.on('data', (data) => {
-        const text = decodeOutput(data).trim()
-        if (text) text.split('\n').forEach(line => processOutput(line.trim()))
-      })
+      const flushStdout = watchOutput(child.stdout, decodeOutput, processOutput)
 
-      child.stderr.on('data', (data) => {
-        const text = decodeOutput(data).trim()
+      const flushStderr = watchOutput(child.stderr, decodeOutput, text => {
         if (text) {
           addLog('stderr', text)
           const deviceMatch = text.match(/open the page (https:\/\/\S+).*enter the code (\S+)/i)
@@ -734,6 +694,8 @@ window.services = {
       })
 
       child.on('close', (code) => {
+        flushStdout()
+        flushStderr()
         if (code === 0) {
           addLog('system', '登录成功')
           window.dispatchEvent(new CustomEvent('tunnel-login-done', { detail: { success: true } }))
@@ -786,18 +748,6 @@ window.services = {
         }
       }))
 
-      // 从日志中提取运行中隧道的URL
-      if (hostProcess && window.__runningTunnelId) {
-        const logs = logBuffer.slice(-50)
-        for (let i = logs.length - 1; i >= 0; i--) {
-          const text = logs[i].text
-          const url = pickConnectUrl(text)
-          if (url) {
-            this.tunnelUrlCache[window.__runningTunnelId] = url
-            break
-          }
-        }
-      }
 
       return detailed
     } catch (e) {
@@ -819,6 +769,7 @@ window.services = {
   },
 
   async createTunnel (options = {}) {
+    if (options.port !== undefined) toPortNumber(options.port)
     // 限制最多 2 个免费隧道
     const MAX_TUNNELS = 2
     try {
@@ -859,21 +810,12 @@ window.services = {
         addLog('system', '端口 ' + options.port + ' 已添加')
       } catch (e) {
         addLog('error', '添加端口失败: ' + e.message)
-        try {
-          await runCommand(['delete', tunnelId, '--force'])
-          addLog('system', '已回滚删除未完成配置的隧道: ' + tunnelId)
-        } catch (deleteErr) {
-          addLog('error', '回滚删除隧道失败: ' + deleteErr.message)
-        }
-        throw new Error('隧道已创建，但端口添加失败: ' + e.message)
+        throw new Error('隧道已创建（ID: ' + tunnelId + '），但端口添加失败: ' + e.message)
       }
     }
 
-    try {
-      return await this.getTunnelWithPorts(tunnelId)
-    } catch (e) {
-      return { ...tunnel, tunnelId, ports: options.port ? [{ portNumber: options.port, protocol: options.protocol || 'auto' }] : [] }
-    }
+    const detail = await this.getTunnelWithPorts(tunnelId)
+    return detail || { ...tunnel, tunnelId, ports: options.port ? [{ portNumber: Number(options.port), protocol: options.protocol || 'auto' }] : [] }
   },
 
   /**
@@ -908,8 +850,8 @@ window.services = {
       const id = normalizeTunnelId(tunnelId)
       if (!id) throw new Error('缺少有效的隧道 ID')
       if (hostProcess && window.__runningTunnelId === id) {
-        this.stopHost()
-        window.__runningTunnelId = null
+        const stopped = await this.stopHost()
+        if (!stopped.success) throw new Error(stopped.message)
       }
       addLog('system', '正在删除隧道: ' + id)
       const result = await runCommand(['delete', id, '--force'])
@@ -951,6 +893,7 @@ window.services = {
 
   async addPort (tunnelId, port, protocol) {
     try {
+      toPortNumber(port)
       const id = normalizeTunnelId(tunnelId)
       if (!id) throw new Error('缺少有效的隧道 ID')
       const args = ['port', 'create', id, '-p', String(port)]
@@ -968,6 +911,7 @@ window.services = {
 
   async deletePort (tunnelId, port) {
     try {
+      toPortNumber(port)
       const id = normalizeTunnelId(tunnelId)
       if (!id) throw new Error('缺少有效的隧道 ID')
       const args = ['port', 'delete', id, '-p', String(port)]
@@ -986,92 +930,90 @@ window.services = {
 
   tunnelUrlCache: {}, // 存储隧道URL
 
-  startHost (tunnelId, port, allowAnonymous) {
-    if (hostProcess) return { success: false, message: '已有隧道在运行中，请先停止' }
-
+  async startHost (tunnelId, port, allowAnonymous) {
+    if (hostProcess || hostStopping) return { success: false, message: '已有隧道在运行或停止中，请先停止' }
     const args = ['host']
     if (tunnelId) args.push(tunnelId)
     else if (port) args.push('-p', String(port))
-    if (allowAnonymous) args.push('--allow-anonymous')
-
-    const devtunnelPath = getDevTunnelPath()
+    if (allowAnonymous === true) args.push('--allow-anonymous')
+    const ownedFile = fileServerMode === 'devtunnel' && Number(fileServerPort) === Number(port) ? fileServer : null
+    const cleanupFile = () => {
+      if (ownedFile && fileServer === ownedFile) this.stopFileServer('devtunnel')
+    }
     addLog('system', formatCommand('devtunnel', args))
-
     try {
-      hostProcess = spawn(devtunnelPath, args, { windowsHide: true })
-      hostPid = hostProcess.pid
-      const currentProcess = hostProcess
-      const currentPid = hostPid
-
-      currentProcess.stdout.on('data', (data) => {
-        const text = decodeOutput(data).trim()
-        if (text) {
-          addLog('stdout', text)
-          window.dispatchEvent(new CustomEvent('tunnel-log', { detail: text }))
-          // 提取可访问 URL，排除 inspect 调试页（调试页通常需要登录）
-          const url = pickConnectUrl(text, port)
-          if (url) {
-            const cacheKey = tunnelId || window.__runningTunnelId || ''
-            if (cacheKey) this.tunnelUrlCache[cacheKey] = url
-            window.dispatchEvent(new CustomEvent('tunnel-url', { detail: { tunnelId: cacheKey, url } }))
-          }
+      const child = spawn(getDevTunnelPath(), args, { windowsHide: true })
+      hostProcess = child
+      hostPid = child.pid
+      hostTunnelId = tunnelId || null
+      let spawned = false
+      let closed = false
+      let settleStart
+      const flushStdout = watchOutput(child.stdout, decodeOutput, text => {
+        if (closed || hostProcess !== child) return
+        addLog('stdout', text)
+        window.dispatchEvent(new CustomEvent('tunnel-log', { detail: text }))
+        const url = pickConnectUrl(text, port)
+        if (url && tunnelId) {
+          this.tunnelUrlCache[tunnelId] = url
+          window.dispatchEvent(new CustomEvent('tunnel-url', { detail: { tunnelId, url } }))
         }
       })
-
-      currentProcess.stderr.on('data', (data) => {
-        const text = decodeOutput(data).trim()
-        if (text) {
-          addLog('stderr', text)
-          window.dispatchEvent(new CustomEvent('tunnel-error', { detail: text }))
-        }
+      const flushStderr = watchOutput(child.stderr, decodeOutput, text => {
+        if (closed || hostProcess !== child) return
+        addLog('stderr', text)
+        window.dispatchEvent(new CustomEvent('tunnel-error', { detail: text }))
       })
-
-      currentProcess.on('close', (code) => {
+      const finish = (code, message) => {
+        if (closed || hostProcess !== child) return
+        flushStdout()
+        flushStderr()
+        closed = true
+        hostProcess = null
+        hostPid = null
+        hostTunnelId = null
+        window.__runningTunnelId = null
+        if (tunnelId) delete this.tunnelUrlCache[tunnelId]
+        cleanupFile()
         addLog('system', '进程退出 (code: ' + code + ')')
-        if (hostProcess === currentProcess && hostPid === currentPid) {
-          window.dispatchEvent(new CustomEvent('tunnel-exit', { detail: code }))
-          hostProcess = null
-          hostPid = null
-        }
-      })
-
-      currentProcess.on('error', (err) => {
-        addLog('error', '启动失败: ' + err.message)
-        if (hostProcess === currentProcess && hostPid === currentPid) {
+        window.dispatchEvent(new CustomEvent('tunnel-host-status', { detail: this.getHostStatus() }))
+        window.dispatchEvent(new CustomEvent('tunnel-exit', { detail: { code, tunnelId } }))
+        if (!spawned) settleStart?.({ success: false, message: message || 'devtunnel 已在启动时退出 (code: ' + code + ')' })
+      }
+      child.once('close', code => finish(code))
+      return await new Promise(resolve => {
+        settleStart = resolve
+        child.once('spawn', () => {
+          if (closed || hostProcess !== child) return
+          spawned = true
+          window.__runningTunnelId = tunnelId || null
+          window.dispatchEvent(new CustomEvent('tunnel-host-status', { detail: this.getHostStatus() }))
+          resolve({ success: true, pid: child.pid })
+        })
+        child.on('error', err => {
+          if (closed || hostProcess !== child) return
+          addLog('error', '进程错误: ' + err.message)
           window.dispatchEvent(new CustomEvent('tunnel-error', { detail: err.message }))
-          hostProcess = null
-          hostPid = null
-        }
+          if (!spawned) finish(-1, err.message)
+        })
       })
-
-      return { success: true, pid: hostPid }
-    } catch (e) {
-      hostProcess = null
-      hostPid = null
-      return { success: false, message: e.message }
+    } catch (err) {
+      cleanupFile()
+      return { success: false, message: err.message }
     }
   },
 
-  stopHost () {
+  async stopHost () {
+    if (hostStopping) return hostStopping
     if (!hostProcess) return { success: false, message: '没有运行中的隧道' }
-    try {
-      const pid = hostPid
-      spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true })
-      addLog('system', '正在停止...')
-      // 清除运行中隧道的URL缓存
-      if (window.__runningTunnelId) {
-        delete this.tunnelUrlCache[window.__runningTunnelId]
-      }
-      hostProcess = null
-      hostPid = null
-      return { success: true }
-    } catch (e) {
-      return { success: false, message: e.message }
-    }
+    const child = hostProcess
+    addLog('system', '正在停止...')
+    hostStopping = stopProcess(child, spawn, process.platform).finally(() => { hostStopping = null })
+    return hostStopping
   },
 
   getHostStatus () {
-    return { running: hostProcess !== null, pid: hostPid }
+    return { running: hostProcess !== null, pid: hostPid, tunnelId: hostTunnelId }
   },
 
   getTunnelUrl (tunnelId) {
@@ -1164,7 +1106,6 @@ window.services = {
     }
     logBuffer = []
     frpcLogBuffer = []
-    configCache = null
   },
 
   // ==================== 工具 ====================
@@ -1396,22 +1337,29 @@ window.services = {
           }
         })
 
-        fileServer.on('error', (err) => {
+        const server = fileServer
+        fileServerMode = mode || 'devtunnel'
+        server.on('error', (err) => {
           if (mode === 'frp') addFrpcLog('error', '文件服务器错误: ' + err.message, 'proxydir')
           else addLog('error', '文件服务器错误: ' + err.message)
-          fileServer = null
-          fileServerPort = null
-          fileServerDir = null
+          if (fileServer === server) {
+            fileServer = null
+            fileServerPort = null
+            fileServerDir = null
+            fileServerMode = null
+          }
           resolve({ success: false, message: '端口 ' + port + ' 启动失败: ' + err.message })
         })
 
-        fileServer.listen(port, '127.0.0.1', () => {
-          fileServerPort = port
+        server.listen(port, '127.0.0.1', () => {
+          if (fileServer !== server) { resolve({ success: false, message: '文件服务启动已取消' }); return }
+          fileServerPort = server.address().port
           fileServerDir = rootDir
+          fileServerMode = mode || 'devtunnel'
           if (mode === 'frp') addFrpcLog('system', '文件服务器已启动: http://127.0.0.1:' + port + ' -> ' + rootDir, 'proxydir')
           else addLog('system', '文件服务器已启动: http://127.0.0.1:' + port + ' -> ' + rootDir)
-          window.dispatchEvent(new CustomEvent('fileserver-started', { detail: { port, dir: rootDir } }))
-          resolve({ success: true, port })
+          window.dispatchEvent(new CustomEvent('fileserver-started', { detail: { port: fileServerPort, dir: rootDir, mode: fileServerMode } }))
+          resolve({ success: true, port: fileServerPort })
         })
       } catch (e) {
         fileServer = null
@@ -1422,13 +1370,16 @@ window.services = {
 
   stopFileServer (mode) {
     if (!fileServer) return { success: false, message: '文件服务器未在运行' }
+    if (mode && fileServerMode && mode !== fileServerMode) return { success: false, message: '文件服务器属于 ' + fileServerMode + ' 模式，拒绝停止' }
     try {
       fileServer.close()
+      fileServer.closeAllConnections?.()
       if (mode === 'frp') addFrpcLog('system', '文件服务器已停止', 'proxydir')
       else addLog('system', '文件服务器已停止')
       fileServer = null
       fileServerPort = null
       fileServerDir = null
+      fileServerMode = null
       return { success: true }
     } catch (e) {
       return { success: false, message: e.message }
@@ -1436,7 +1387,7 @@ window.services = {
   },
 
   getFileServerStatus () {
-    return { running: fileServer !== null, port: fileServerPort, dir: fileServerDir }
+    return { running: fileServer !== null, port: fileServerPort, dir: fileServerDir, mode: fileServerMode }
   },
 
   // ==================== Frp 管理 ====================
@@ -1446,7 +1397,8 @@ window.services = {
       const doc = window.utools.db.get('frp-config')
       if (!doc) return null
       return {
-        server: { ...(doc.server || {}), token: getLocal('frp-token', '') },
+        revision: doc._rev || null,
+        server: { serverAddr: '', serverPort: '7000', ...(doc.server || {}), token: getLocal('frp-token', '') },
         proxies: doc.proxies || []
       }
     } catch (e) {
@@ -1456,21 +1408,33 @@ window.services = {
 
   async saveFrpConfig (config) {
     try {
-      const server = { ...(config.server || {}) }
-      if (Object.prototype.hasOwnProperty.call(server, 'token')) {
-        if (server.token) setLocal('frp-token', server.token)
-        else removeLocal('frp-token')
-        delete server.token
+      if (config.server !== undefined) {
+        const fields = ['serverAddr', 'serverPort', 'token']
+        if (!config.server || Object.keys(config.server).some(key => !fields.includes(key))) throw new Error('不支持的服务器配置字段')
+        if (config.server.serverPort !== undefined) toPortNumber(config.server.serverPort)
+        if (config.server.serverAddr !== undefined && (typeof config.server.serverAddr !== 'string' || !config.server.serverAddr.trim() || /[\s/\\]/.test(config.server.serverAddr))) throw new Error('请输入有效的服务器 IP 或域名，不含协议和路径')
+        if (config.server.token !== undefined && typeof config.server.token !== 'string') throw new Error('Token 必须是字符串')
       }
-      const doc = { _id: 'frp-config', server, proxies: config.proxies }
-      try {
-        const existing = window.utools.db.get('frp-config')
-        if (existing) doc._rev = existing._rev
-      } catch (e) {}
-      window.utools.db.put(doc)
-      return { success: true }
-    } catch (e) {
-      return { success: false, message: e.message }
+      const existing = window.utools.db.get('frp-config') || {}
+      if (Object.prototype.hasOwnProperty.call(config, 'expectedRevision') && config.expectedRevision !== (existing._rev || null)) throw new Error('FRP 配置已被同步更新，请重新进入页面后再保存')
+      const server = { ...existing.server, ...config.server }
+      if (config.proxies !== undefined) {
+        const error = validateProxies(config.proxies, server)
+        if (error) throw new Error(error)
+      }
+      const hasToken = Object.prototype.hasOwnProperty.call(config.server || {}, 'token')
+      const token = config.server?.token
+      delete server.token
+      const doc = { ...existing, _id: 'frp-config', server, proxies: config.proxies !== undefined ? config.proxies : (existing.proxies || []) }
+      const result = window.utools.db.put(doc)
+      if (!result?.ok) throw new Error(result?.message || '保存 FRP 配置失败')
+      if (hasToken) {
+        if (token) setLocal('frp-token', token)
+        else removeLocal('frp-token')
+      }
+      return { success: true, revision: result.rev || existing._rev || null, proxies: doc.proxies }
+    } catch (err) {
+      return { success: false, message: err.message }
     }
   },
 
@@ -1526,148 +1490,13 @@ window.services = {
     }
   },
 
-  generateFrpcConfig (serverConfig, proxies) {
-    let toml = `serverAddr = ${tomlString(serverConfig.serverAddr)}\n`
-    toml += `serverPort = ${toPortNumber(serverConfig.serverPort, 7000)}\n`
-    if (serverConfig.token) toml += `auth.token = ${tomlString(serverConfig.token)}\n`
-    toml += '\n'
+  generateFrpcConfig,
 
-    for (const p of proxies) {
-      toml += '[[proxies]]\n'
-      toml += `name = ${tomlString(p.name)}\n`
-      toml += `type = ${tomlString(p.type)}\n`
-      toml += `localPort = ${toPortNumber(p.localPort)}\n`
-      if (p.type === 'tcp' && p.remotePort) toml += `remotePort = ${toPortNumber(p.remotePort)}\n`
-      if (p.type === 'http' && p.customDomain) toml += `customDomains = [${tomlString(p.customDomain)}]\n`
-      toml += '\n'
-    }
-    return toml
-  },
-
-  startFrpc (serverConfig, proxies, source) {
-    if (frpcProcess) return { success: false, message: 'frpc 已在运行中' }
-    frpcSource = source || 'frp'
-
-    const frpcPath = this.getFrpcPath()
-    if (!fs.existsSync(frpcPath)) {
-      frpcSource = ''
-      return { success: false, message: 'frpc 未找到: ' + frpcPath + '\n请在「设置」页面配置 frpc 路径' }
-    }
-
-    // 生成临时配置文件
-    let configContent
-    try {
-      configContent = this.generateFrpcConfig(serverConfig, proxies)
-    } catch (e) {
-      frpcSource = ''
-      return { success: false, message: '生成配置失败: ' + e.message }
-    }
-    const configPath = path.join(require('os').tmpdir(), 'frpc-tunnel-plugin.toml')
-    try {
-      fs.writeFileSync(configPath, configContent, 'utf-8')
-    } catch (e) {
-      frpcSource = ''
-      return { success: false, message: '写入配置文件失败: ' + e.message }
-    }
-
-    addFrpcLog('system', '配置文件: ' + configPath, frpcSource)
-    addFrpcLog('system', '配置内容:\n' + maskFrpcConfig(configContent), frpcSource)
-
-    const args = ['-c', configPath]
-    addFrpcLog('system', formatCommand('frpc', args), frpcSource)
-
-    addFrpcLog('system', '可执行文件: ' + frpcPath, frpcSource)
-
-    try {
-      frpcProcess = spawn(frpcPath, args, { windowsHide: true })
-      frpcPid = frpcProcess.pid
-      const currentProcess = frpcProcess
-      const currentPid = frpcPid
-      const currentSource = frpcSource
-      let stderrBuf = ''
-      let errorFired = false
-
-      currentProcess.stdout.on('data', (data) => {
-        const text = data.toString().trim()
-        if (text) addFrpcLog('stdout', text, currentSource)
-      })
-
-      currentProcess.stderr.on('data', (data) => {
-        const text = data.toString().trim()
-        if (text) {
-          stderrBuf += text + '\n'
-          addFrpcLog('stderr', text, currentSource)
-        }
-      })
-
-      currentProcess.on('close', (code) => {
-        const errMsg = stderrBuf.trim()
-        const wasStopping = currentProcess.__stopping === true
-
-        // 主动停止时不显示错误
-        if (code !== 0 && !errorFired && !wasStopping) {
-          const detail = errMsg || ('frpc 退出码: ' + code)
-          addFrpcLog('error', detail, currentSource)
-          if (frpcProcess === currentProcess && frpcPid === currentPid) {
-            dispatchFrpcEvent('frpc-error', { message: detail }, currentSource)
-          }
-        }
-
-        addFrpcLog('system', 'frpc 进程退出 (code: ' + code + ')', currentSource)
-        if (frpcProcess === currentProcess && frpcPid === currentPid) {
-          dispatchFrpcEvent('frpc-exit', { code }, currentSource)
-          frpcProcess = null
-          frpcPid = null
-          frpcSource = ''
-        }
-        try { fs.unlinkSync(configPath) } catch (e) {}
-      })
-
-      currentProcess.on('error', (err) => {
-        errorFired = true
-        addFrpcLog('error', err.message, currentSource)
-        if (frpcProcess === currentProcess && frpcPid === currentPid) {
-          dispatchFrpcEvent('frpc-error', { message: err.message }, currentSource)
-          dispatchFrpcEvent('frpc-exit', { code: -1 }, currentSource)
-          frpcProcess = null
-          frpcPid = null
-          frpcSource = ''
-        }
-        try { fs.unlinkSync(configPath) } catch (e) {}
-      })
-
-      return { success: true, pid: frpcPid, source: frpcSource }
-    } catch (e) {
-      frpcProcess = null
-      frpcPid = null
-      frpcSource = ''
-      return { success: false, message: e.message }
-    }
-  },
-
-  stopFrpc () {
-    if (!frpcProcess) return { success: false, message: 'frpc 未在运行' }
-    try {
-      const currentProcess = frpcProcess
-      const currentSource = frpcSource
-      const pid = frpcPid
-      currentProcess.__stopping = true
-      spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true })
-      addFrpcLog('system', '正在停止 frpc...', currentSource)
-      frpcProcess = null
-      frpcPid = null
-      frpcSource = ''
-      return { success: true, source: currentSource }
-    } catch (e) {
-      return { success: false, message: e.message }
-    }
-  },
-
-  getFrpcStatus () {
-    return { running: frpcProcess !== null, pid: frpcPid, source: frpcSource }
-  },
+  ...frpcController,
 
   async testFrpConnection (serverAddr, serverPort) {
+    const error = validateServer({ serverAddr, serverPort })
+    if (error) return { success: false, message: error }
     // 简单的 TCP 连通性测试
     const net = require('net')
     return new Promise((resolve) => {
