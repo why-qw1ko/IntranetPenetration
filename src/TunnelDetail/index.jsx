@@ -24,6 +24,8 @@ export default function TunnelDetail ({ tunnel: initialTunnel, onBack, showToast
   const [loading, setLoading] = useState(true)
   const [logs, setLogs] = useState([])
   const logEndRef = useRef(null)
+  const startPending = useRef(false)
+  const [starting, setStarting] = useState(false)
 
   const tunnelId = tunnel.tunnelId || tunnel.tunnel_id || tunnel.id || ''
   // 判断是否为代理目录隧道
@@ -55,9 +57,9 @@ export default function TunnelDetail ({ tunnel: initialTunnel, onBack, showToast
   // 日志监听 + 隧道运行状态事件
   useEffect(() => {
     const history = window.services?.getLogBuffer() || []
-    setLogs(history.map(h => ({ ...h, time: new Date(h.time) })))
+    setLogs(history.slice(-500).map(h => ({ ...h, time: new Date(h.time) })))
 
-    const onLogEntry = (e) => setLogs(prev => [...prev, { ...e.detail, time: new Date(e.detail.time) }])
+    const onLogEntry = (e) => setLogs(prev => [...prev.slice(-499), { ...e.detail, time: new Date(e.detail.time) }])
     const onUrl = (e) => {
       if (e.detail.tunnelId === tunnelId) setTunnelUrl(e.detail.url)
     }
@@ -185,40 +187,33 @@ export default function TunnelDetail ({ tunnel: initialTunnel, onBack, showToast
   }, [tunnelUrl, showToast])
 
   const handleStart = useCallback(async () => {
-    let latestTunnel = tunnel
-    let portNum = tunnel.ports?.[0]?.portNumber
+    if (startPending.current) return
+    startPending.current = true
+    setStarting(true)
     try {
-      const full = await window.services.getTunnelWithPorts(tunnelId)
-      if (full) {
-        latestTunnel = full
-        portNum = full.ports?.[0]?.portNumber || portNum
-        setTunnel(full)
+      const services = window.services
+      const latest = await services.getTunnelWithPorts(tunnelId)
+      if (!latest) throw new Error('读取最新隧道配置失败，请重试')
+      const currentPort = latest.ports?.[0]?.portNumber
+      if (!currentPort) throw new Error('请先配置端口')
+      if (services.getHostStatus()?.running) throw new Error('已有隧道在运行，请先停止')
+      const description = latest.description || ''
+      if (description.startsWith('代理目录: ')) {
+        const result = await services.startFileServer(description.slice('代理目录: '.length), currentPort)
+        if (!result?.success) throw new Error('文件服务器启动失败: ' + (result?.message || '未知错误'))
       }
-    } catch (err) {}
-    if (!portNum) { showToast('请先配置端口', 'error'); return }
-
-    const latestDescription = latestTunnel.description || ''
-    const latestDirProxyPath = latestDescription.startsWith('代理目录: ')
-      ? latestDescription.replace('代理目录: ', '')
-      : ''
-
-    // 代理目录隧道：先启动本地文件服务器
-    if (latestDirProxyPath) {
-      const fsResult = await window.services.startFileServer(latestDirProxyPath, portNum)
-      if (!fsResult.success) {
-        showToast('文件服务器启动失败: ' + fsResult.message, 'error')
-        return
-      }
-    }
-
-    const result = await window.services.startHost(tunnelId, portNum)
-    syncHostStatus()
-    if (result.success) {
+      const result = await services.startHost(latest.tunnelId, currentPort)
+      syncHostStatus()
+      if (!result?.success) throw new Error(result?.message || '进程未能启动')
+      setTunnel(latest)
       showToast('启动中...')
-    } else {
-      showToast('启动失败: ' + result.message, 'error')
+    } catch (error) {
+      showToast('启动失败: ' + error.message, 'error')
+    } finally {
+      startPending.current = false
+      setStarting(false)
     }
-  }, [tunnelId, tunnel, showToast, syncHostStatus])
+  }, [tunnelId, showToast, syncHostStatus])
 
   const handleStop = useCallback(async () => {
     const result = await window.services.stopHost()
@@ -266,7 +261,7 @@ export default function TunnelDetail ({ tunnel: initialTunnel, onBack, showToast
                     </button>
                     )
                   : (
-                    <button className='btn btn-brand btn-sm' onClick={handleStart}>
+                    <button className='btn btn-brand btn-sm' onClick={handleStart} disabled={loading || starting}>
                       <Play size={13} /> 启动
                     </button>
                     )}

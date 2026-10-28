@@ -3,6 +3,12 @@ import { ClipboardCopy, Globe, Square, Play, BookOpen, Lightbulb, Server, Link2 
 import ConfirmModal from '../ConfirmModal'
 import './index.css'
 
+function directoryUrl (runtime, proxy) {
+  if (proxy.type === 'http') return 'http://' + proxy.customDomain
+  const host = runtime.serverAddr.includes(':') && !runtime.serverAddr.startsWith('[') ? '[' + runtime.serverAddr + ']' : runtime.serverAddr
+  return 'http://' + host + ':' + proxy.remotePort
+}
+
 function parsePort (value) {
   if (!/^\d+$/.test(String(value))) return null
   const num = Number(value)
@@ -104,7 +110,7 @@ export default function ProxyDir ({ onToggleSidebar, onOpenSettings, showToast }
       const dir = fsStatus?.dir || savedDirPath || '(已启动)'
       setServerInfo({ port: fsStatus?.port || port, dir })
       const proxy = frpcStatus.proxies?.[0]
-      if (proxy?.status === 'running') setTunnelUrl(proxy.type === 'tcp' ? frpcStatus.serverAddr + ':' + proxy.remotePort : 'http://' + proxy.customDomain)
+      if (proxy?.status === 'running') setTunnelUrl(directoryUrl(frpcStatus, proxy))
     } else if (fsStatus?.running) {
       // 文件服务器运行中（代理目录 devtunnel 模式）
       setRunning(true)
@@ -207,7 +213,7 @@ export default function ProxyDir ({ onToggleSidebar, onOpenSettings, showToast }
           dir: currentFile?.dir || dirPath || '(已启动)'
         })
         const proxy = detail.proxies?.[0]
-        setTunnelUrl(proxy?.status === 'running' ? (proxy.type === 'tcp' ? detail.serverAddr + ':' + proxy.remotePort : 'http://' + proxy.customDomain) : '')
+        setTunnelUrl(proxy?.status === 'running' ? directoryUrl(detail, proxy) : '')
         if (proxy?.status === 'error') setError(proxy.message || '代理注册失败，请查看日志')
       } else if (activeFileModeRef.current === 'frp') {
         setRunning(false)
@@ -262,296 +268,115 @@ export default function ProxyDir ({ onToggleSidebar, onOpenSettings, showToast }
     })
   }
 
-  // 检查是否有已存在的隧道
-  // 返回：{ tunnel, matchType } 或 null
-  // matchType: 'same'(同目录+同端口) | 'sameDir'(同目录+不同端口) | 'samePort'(同端口+不同目录)
+  // 查询失败必须上报，只有成功查询且没有匹配项时才能新建。
   const checkExistingTunnel = useCallback(async () => {
-    try {
-      const targetPort = parsePort(port)
-      if (!targetPort) return null
-      const dirDesc = '代理目录: ' + dirPath
-
-      // 1. 先检查本地存储中保存的隧道（只查一次）
-      const saved = window.services?.getProxyDirLastTunnel?.()
-      if (saved?.tunnelId) {
-        try {
-          const tunnel = await window.services.getTunnelWithPorts(saved.tunnelId)
-          if (tunnel?.tunnelId) {
-            const hasSamePort = tunnel.ports?.some(p => p.portNumber === targetPort)
-            const hasSameDir = tunnel.description === dirDesc
-
-            if (hasSameDir && hasSamePort) return { tunnel, matchType: 'same' }
-            if (hasSameDir && !hasSamePort) return { tunnel, matchType: 'sameDir' }
-            if (!hasSameDir && hasSamePort) return { tunnel, matchType: 'samePort' }
-          }
-        } catch (e) {}
-      }
-
-      // 2. 查询所有隧道（listTunnels 已并行获取端口信息），直接在内存中匹配
-      const tunnels = await window.services.listTunnels()
-
-      // 优先级：同目录+同端口 > 同目录+不同端口 > 同端口+不同目录
-      let sameMatch = null
-      let sameDirMatch = null
-      let samePortMatch = null
-
-      for (const t of tunnels) {
-        const hasSamePort = t.ports?.some(p => p.portNumber === targetPort)
-        const hasSameDir = t.description === dirDesc
-
-        if (hasSameDir && hasSamePort && !sameMatch) {
-          sameMatch = t
-        } else if (hasSameDir && !hasSamePort && !sameDirMatch) {
-          sameDirMatch = t
-        } else if (!hasSameDir && hasSamePort && !samePortMatch) {
-          samePortMatch = t
-        }
-      }
-
-      if (sameMatch) return { tunnel: sameMatch, matchType: 'same' }
-      if (sameDirMatch) return { tunnel: sameDirMatch, matchType: 'sameDir' }
-      if (samePortMatch) return { tunnel: samePortMatch, matchType: 'samePort' }
-    } catch (e) {}
-    return null
+    const targetPort = parsePort(port)
+    const dirDesc = '代理目录: ' + dirPath
+    const tunnels = await window.services.listTunnels()
+    if (!Array.isArray(tunnels)) throw new Error('隧道列表格式无效，请刷新重试')
+    const savedId = window.services.getProxyDirLastTunnel?.()?.tunnelId
+    const candidates = [...tunnels].sort((a, b) => Number(b.tunnelId === savedId) - Number(a.tunnelId === savedId))
+    let sameDir, samePort
+    for (const tunnel of candidates) {
+      const hasPort = tunnel.ports?.some(item => Number(item.portNumber) === targetPort)
+      const hasDir = tunnel.description === dirDesc
+      if (hasDir && hasPort) return { tunnel, matchType: 'same' }
+      if (hasDir && !sameDir) sameDir = tunnel
+      if (hasPort && !samePort) samePort = tunnel
+    }
+    return sameDir ? { tunnel: sameDir, matchType: 'sameDir' } : samePort ? { tunnel: samePort, matchType: 'samePort' } : null
   }, [port, dirPath])
 
-  // 启用已有隧道（处理 sameDir 和 samePort 两种情况）
-  const handleUseExisting = useCallback(async () => {
-    if (operationRef.current && !awaitingConfirmRef.current) return
-    operationRef.current = true
-    setShowConfirm(false)
-    awaitingConfirmRef.current = false
-    if (!existingTunnel) { operationRef.current = false; return }
-
-    setLoading(true)
+  // 新建、直接复用和确认复用共用一条执行路径，只清理本次拥有的文件服务。
+  const executeDevtunnel = useCallback(async (match = null) => {
+    const services = window.services
+    let ownsFile = false
+    const write = async operation => {
+      const result = await operation
+      if (!result || result.success === false) throw new Error(result?.message || '隧道配置操作失败')
+      return result
+    }
     try {
-      // 0. 先停止已有的隧道进程
+      const targetPort = parsePort(port)
+      if (!targetPort) throw new Error('请输入有效端口号 (1-65535)')
+      const directory = await services.validateFileServerDirectory(dirPath)
+      if (!directory.success) throw new Error(directory.message)
+      let tunnel = match?.tunnel
+      if (tunnel) {
+        const latest = await services.getTunnelWithPorts(tunnel.tunnelId)
+        const ports = value => JSON.stringify(value.ports?.map(item => [item.portNumber, item.protocol || 'auto']))
+        if (!latest || latest.description !== tunnel.description || ports(latest) !== ports(tunnel)) throw new Error('隧道配置已变化或读取失败，请重新检查后启动')
+        tunnel = latest
+      }
+      const currentFile = services.getFileServerStatus()
+      if (currentFile.running && (currentFile.mode !== 'devtunnel' || !services.getHostStatus().running)) throw new Error('文件服务器正在被其他操作使用，请先停止')
       const stopPromise = stopCurrentHost()
       if (stopPromise) await stopPromise
-
-      // 1. 启动本地文件服务器
-      const targetPort = parsePort(port)
-      if (!targetPort) {
-        setError('请输入有效端口号 (1-65535)')
-        setLoading(false)
-        return
-      }
-
-      const fsResult = await window.services.startFileServer(dirPath, targetPort)
-      if (!fsResult.success) {
-        setError(fsResult.message)
-        setLoading(false)
-        return
-      }
-      activeFileModeRef.current = 'devtunnel'
-
-      const tid = existingTunnel.tunnelId
-      // 2. sameDir：先新增端口，删除旧端口失败时撤回新增端口。
-      if (matchType === 'sameDir') {
-        const oldPort = existingTunnel.ports?.[0]?.portNumber
-        await window.services.addPort(tid, targetPort, 'auto')
+      const started = await services.startFileServer(dirPath, targetPort, 'devtunnel')
+      if (!started?.success) throw new Error(started?.message || '文件服务器启动失败')
+      ownsFile = true
+      if (!tunnel) {
+        tunnel = await services.createTunnel({ port: targetPort, protocol: 'auto', anonymous: allowAnonymous, description: '代理目录: ' + dirPath })
+      } else if (match.matchType === 'sameDir') {
+        const oldPort = tunnel.ports?.[0]?.portNumber
+        await write(services.addPort(tunnel.tunnelId, targetPort, 'auto'))
         if (oldPort) {
-          try {
-            await window.services.deletePort(tid, oldPort)
-          } catch (deleteError) {
-            try { await window.services.deletePort(tid, targetPort) } catch (rollbackError) {
-              throw new Error(deleteError.message + '；回滚新增端口失败: ' + rollbackError.message)
+          try { await write(services.deletePort(tunnel.tunnelId, oldPort)) } catch (error) {
+            try { await write(services.deletePort(tunnel.tunnelId, targetPort)) } catch (rollbackError) {
+              throw new Error(error.message + '；回滚新增端口失败: ' + rollbackError.message)
             }
-            throw deleteError
+            throw error
           }
         }
       }
-
-      // 3. 同步描述和匿名访问策略
-      const updateOptions = { anonymous: allowAnonymous }
-      if (matchType === 'samePort') updateOptions.description = '代理目录: ' + dirPath
-      try {
-        await window.services.updateTunnel(tid, updateOptions)
-      } catch (e) {
-        setError(e.message || '更新隧道访问策略失败')
-        window.services.stopFileServer()
-        setLoading(false)
-        return
-      }
-
-      // 4. 启动隧道
+      const tid = tunnel?.tunnelId
+      if (!tid) throw new Error('无法识别隧道 ID，请刷新后确认')
+      const options = { anonymous: allowAnonymous }
+      if (match?.matchType === 'samePort') options.description = '代理目录: ' + dirPath
+      await write(services.updateTunnel(tid, options))
       activeTunnelRef.current = tid
-      const hostResult = await window.services.startHost(tid, targetPort)
-      if (!hostResult?.success) {
-        setError(hostResult.message)
-        window.services.stopFileServer()
-        setLoading(false)
-        return
-      }
-
-      // 5. 保存 tunnelId 到本地存储
-      try {
-        window.services?.saveProxyDirLastTunnel?.({ port: targetPort, tunnelId: tid })
-      } catch (e) {}
-
+      activeFileModeRef.current = 'devtunnel'
+      await write(services.startHost(tid, targetPort))
       tunnelIdRef.current = tid
       setRunning(true)
-      activeFileModeRef.current = 'devtunnel'
       setServerInfo({ port: targetPort, dir: dirPath })
-      window.services?.addProxyDirLog?.('system', '[代理目录] devtunnel 模式启动: ' + dirPath + ' -> 端口 ' + port, 'devtunnel')
+      try { services.saveProxyDirLastTunnel?.({ port: targetPort, tunnelId: tid }) } catch (error) { showToast('隧道已启动，但未能保存复用记录: ' + error.message, 'error') }
+      services.addProxyDirLog?.('system', '[代理目录] devtunnel 模式启动: ' + dirPath + ' -> 端口 ' + port, 'devtunnel')
       showToast('正在启动...')
-    } catch (err) {
-      setError(err.message || '启动失败')
-      window.services.stopFileServer()
+    } catch (error) {
+      if (ownsFile) services.stopFileServer('devtunnel')
+      setError(error.message || '启动失败')
+    }
+  }, [dirPath, port, allowAnonymous, showToast])
+
+  const handleUseExisting = useCallback(async () => {
+    if (!awaitingConfirmRef.current || !existingTunnel) return
+    awaitingConfirmRef.current = false
+    setShowConfirm(false)
+    try {
+      await executeDevtunnel({ tunnel: existingTunnel, matchType })
     } finally {
-      setLoading(false)
       setExistingTunnel(null)
       setMatchType('')
       operationRef.current = false
+      setLoading(false)
     }
-  }, [existingTunnel, matchType, dirPath, port, allowAnonymous, showToast])
-
-  // 实际创建隧道的逻辑
-  const doStartDevtunnel = useCallback(async () => {
-    setLoading(true)
-    try {
-      // 0. 先停止已有的隧道进程
-      const stopPromise = stopCurrentHost()
-      if (stopPromise) await stopPromise
-
-      // 1. 启动本地文件服务器（等待端口真正监听）
-      const targetPort = parsePort(port)
-      if (!targetPort) {
-        setError('请输入有效端口号 (1-65535)')
-        setLoading(false)
-        return
-      }
-
-      const fsResult = await window.services.startFileServer(dirPath, targetPort)
-      if (!fsResult.success) {
-        setError(fsResult.message)
-        setLoading(false)
-        return
-      }
-
-      // 2. 创建 devtunnel
-      const tunnel = await window.services.createTunnel({
-        port: targetPort,
-        protocol: 'auto',
-        anonymous: allowAnonymous,
-        description: '代理目录: ' + dirPath
-      })
-
-      const tid = tunnel.tunnelId || tunnel.tunnel_id || tunnel.id
-      await window.services.updateTunnel(tid, { anonymous: allowAnonymous })
-      tunnelIdRef.current = tid
-
-      // 3. 启动隧道
-      activeTunnelRef.current = tid
-      const hostResult = await window.services.startHost(tid, targetPort)
-      if (!hostResult?.success) {
-        setError(hostResult.message)
-        window.services.stopFileServer()
-        setLoading(false)
-        return
-      }
-
-      // 4. 保存 tunnelId 到本地存储
-      try {
-        window.services?.saveProxyDirLastTunnel?.({ port: targetPort, tunnelId: tid })
-      } catch (e) {}
-
-      setRunning(true)
-      activeFileModeRef.current = 'devtunnel'
-      setServerInfo({ port: targetPort, dir: dirPath })
-      window.services?.addProxyDirLog?.('system', '[代理目录] devtunnel 模式启动: ' + dirPath + ' -> 端口 ' + port, 'devtunnel')
-      showToast('正在启动...')
-    } catch (err) {
-      setError(err.message || '启动失败')
-      window.services.stopFileServer()
-    }
-    setLoading(false)
-  }, [dirPath, port, allowAnonymous, showToast])
-
-  // 同目录+同端口：直接复用，不弹窗
-  const handleDirectReuse = useCallback(async (tunnel) => {
-    setLoading(true)
-    try {
-      const stopPromise = stopCurrentHost()
-      if (stopPromise) await stopPromise
-
-      const targetPort = parsePort(port)
-      if (!targetPort) {
-        setError('请输入有效端口号 (1-65535)')
-        setLoading(false)
-        return
-      }
-
-      const fsResult = await window.services.startFileServer(dirPath, targetPort)
-      if (!fsResult.success) {
-        setError(fsResult.message)
-        setLoading(false)
-        return
-      }
-
-      const tid = tunnel.tunnelId
-      try {
-        await window.services.updateTunnel(tid, { anonymous: allowAnonymous })
-      } catch (e) {
-        setError(e.message || '更新隧道访问策略失败')
-        window.services.stopFileServer()
-        setLoading(false)
-        return
-      }
-      activeTunnelRef.current = tid
-      const hostResult = await window.services.startHost(tid, targetPort)
-      if (!hostResult?.success) {
-        setError(hostResult.message)
-        window.services.stopFileServer()
-        setLoading(false)
-        return
-      }
-
-      try {
-        window.services?.saveProxyDirLastTunnel?.({ port: targetPort, tunnelId: tid })
-      } catch (e) {}
-
-      tunnelIdRef.current = tid
-      setRunning(true)
-      activeFileModeRef.current = 'devtunnel'
-      setServerInfo({ port: targetPort, dir: dirPath })
-      window.services?.addProxyDirLog?.('system', '[代理目录] devtunnel 模式启动: ' + dirPath + ' -> 端口 ' + port, 'devtunnel')
-      showToast('正在启动...')
-    } catch (err) {
-      setError(err.message || '启动失败')
-      window.services.stopFileServer()
-    }
-    setLoading(false)
-  }, [dirPath, port, allowAnonymous, showToast])
+  }, [existingTunnel, matchType, executeDevtunnel])
 
   const handleStartDevtunnel = useCallback(async () => {
-    setLoading(true)
     showToast('正在检查隧道配置，请耐心等待...')
-    try {
-      // 先检查是否有已存在的隧道
-      const stopPromise = stopCurrentHost()
-      if (stopPromise) await stopPromise
-      const result = await checkExistingTunnel()
-      if (result) {
-        // 同目录+同端口：直接复用，不弹窗
-        if (result.matchType === 'same') {
-          await handleDirectReuse(result.tunnel)
-          return
-        }
-        // 同目录+不同端口 或 同端口+不同目录：弹窗确认
-        setExistingTunnel(result.tunnel)
-        setMatchType(result.matchType)
-        awaitingConfirmRef.current = true
-        setShowConfirm(true)
-        return
-      }
-      // 无匹配：创建新隧道
-      await doStartDevtunnel()
-    } catch (err) {
-      setLoading(false)
-      setError(err.message || '检查隧道失败')
+    const directory = await window.services.validateFileServerDirectory(dirPath)
+    if (!directory.success) throw new Error(directory.message)
+    const match = await checkExistingTunnel()
+    if (match && match.matchType !== 'same') {
+      setExistingTunnel(match.tunnel)
+      setMatchType(match.matchType)
+      awaitingConfirmRef.current = true
+      setShowConfirm(true)
+      return
     }
-  }, [checkExistingTunnel, doStartDevtunnel, handleDirectReuse, showToast])
+    await executeDevtunnel(match)
+  }, [dirPath, checkExistingTunnel, executeDevtunnel, showToast])
 
   const handleStartFrp = useCallback(async () => {
     // 启动前重读共享配置；预检失败不进入会清理文件服务器的启动分支。
@@ -580,9 +405,20 @@ export default function ProxyDir ({ onToggleSidebar, onOpenSettings, showToast }
       return
     }
 
+    const proxyConfig = {
+      name: 'proxydir-' + Date.now(),
+      type: frpProxyType,
+      localPort: targetPort,
+      remotePort: frpProxyType === 'tcp' ? remotePort : undefined,
+      customDomain: frpProxyType === 'http' ? frpDomain : undefined
+    }
+    let ownsFile = false
     setLoading(true)
     try {
-      // 1. 启动本地文件服务器（等待端口真正监听）
+      const directory = await window.services.validateFileServerDirectory(dirPath)
+      if (!directory.success) throw new Error(directory.message)
+      window.services.generateFrpcConfig(server, [proxyConfig])
+      if (window.services.getFrpcStatus().running) throw new Error('frpc 已在运行，请先停止')
       const stopPromise = stopCurrentHost()
       if (stopPromise) await stopPromise
       const fsResult = await window.services.startFileServer(dirPath, targetPort, 'frp')
@@ -591,15 +427,9 @@ export default function ProxyDir ({ onToggleSidebar, onOpenSettings, showToast }
         setLoading(false)
         return
       }
+      ownsFile = true
 
       // 2. 启动 frpc
-      const proxyConfig = {
-        name: 'proxydir-' + Date.now(),
-        type: frpProxyType,
-        localPort: targetPort,
-        remotePort: frpProxyType === 'tcp' ? remotePort : undefined,
-        customDomain: frpProxyType === 'http' ? frpDomain : undefined
-      }
       activeFileModeRef.current = 'frp'
       const result = await window.services.startFrpc(server, [proxyConfig], 'proxydir')
       if (!result?.success) {
@@ -620,8 +450,11 @@ export default function ProxyDir ({ onToggleSidebar, onOpenSettings, showToast }
       showToast('正在启动 frpc...')
     } catch (err) {
       setError(err.message || '启动失败')
-      window.services.stopFileServer('frp')
-      setRunning(Boolean(window.services.getFrpcStatus().running))
+      if (ownsFile) window.services.stopFileServer('frp')
+      const runtime = window.services.getFrpcStatus()
+      const file = window.services.getFileServerStatus()
+      setRunning(Boolean(runtime.running && runtime.source === 'proxydir' && file.running && file.mode === 'frp'))
+      if (!file.running) activeFileModeRef.current = null
     }
     setLoading(false)
   }, [dirPath, port, frpProxyType, frpRemotePort, frpDomain, showToast])
@@ -649,6 +482,8 @@ export default function ProxyDir ({ onToggleSidebar, onOpenSettings, showToast }
       } else {
         await handleStartDevtunnel()
       }
+    } catch (error) {
+      setError(error.message || '启动失败')
     } finally {
       if (!awaitingConfirmRef.current) {
         operationRef.current = false
@@ -800,9 +635,10 @@ export default function ProxyDir ({ onToggleSidebar, onOpenSettings, showToast }
               </div>
 
               <div className='form-group'>
-                <label className='form-label'>本地目录 *</label>
+                <label className='form-label' htmlFor='proxydir-field-1'>本地目录 *</label>
                 <div className='dir-row'>
                   <input
+                    id='proxydir-field-1'
                     className='form-input dir-input'
                     type='text'
                     value={dirPath}
@@ -817,8 +653,9 @@ export default function ProxyDir ({ onToggleSidebar, onOpenSettings, showToast }
               </div>
 
               <div className='form-group'>
-                <label className='form-label'>端口号 *</label>
+                <label className='form-label' htmlFor='proxydir-field-2'>端口号 *</label>
                 <input
+                  id='proxydir-field-2'
                   className='form-input port-input'
                   disabled={loading}
                   type='number'
@@ -883,8 +720,9 @@ export default function ProxyDir ({ onToggleSidebar, onOpenSettings, showToast }
 
                   {frpProxyType === 'tcp' && (
                     <div className='form-group'>
-                      <label className='form-label'>远程端口 *</label>
+                      <label className='form-label' htmlFor='proxydir-field-3'>远程端口 *</label>
                       <input
+                        id='proxydir-field-3'
                         className='form-input port-input'
                         disabled={loading}
                         type='number'
@@ -901,8 +739,9 @@ export default function ProxyDir ({ onToggleSidebar, onOpenSettings, showToast }
 
                   {frpProxyType === 'http' && (
                     <div className='form-group'>
-                      <label className='form-label'>自定义域名 *</label>
+                      <label className='form-label' htmlFor='proxydir-field-4'>自定义域名 *</label>
                       <input
+                        id='proxydir-field-4'
                         className='form-input'
                         disabled={loading}
                         type='text'

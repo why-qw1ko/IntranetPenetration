@@ -111,7 +111,12 @@ export default function Settings ({ onToggleSidebar, showToast }) {
       danger: true,
       onConfirm: () => {
         setConfirmProps(null)
-        window.services?.clearAllData?.()
+        const result = window.services.clearAllData()
+        if (!result?.success) {
+          setSaveStatus(result?.message || '清除失败，请重试')
+          showToast(result?.message || '清除失败，请重试', 'error')
+          return
+        }
         // 重新读取配置（清除缓存后的默认值）
         const freshConfig = window.services?.getConfig?.()
         if (freshConfig) setConfig(freshConfig)
@@ -201,12 +206,12 @@ export default function Settings ({ onToggleSidebar, showToast }) {
             <span className='card-title'>创建隧道默认值</span>
           </div>
           <div className='form-group'>
-            <label className='form-label'>默认端口</label>
-            <input className='form-input' type='number' value={config.defaultPort} onChange={(e) => { setConfig(prev => ({ ...prev, defaultPort: e.target.value })); setSaveErrors(prev => ({ ...prev, defaultPort: '' })) }} onBlur={e => saveSetting('defaultPort', e.target.value)} aria-invalid={Boolean(saveErrors.defaultPort)} min='1' max='65535' />
+            <label className='form-label' htmlFor='settings-field-1'>默认端口</label>
+            <input id='settings-field-1' className='form-input' type='number' value={config.defaultPort} onChange={(e) => { setConfig(prev => ({ ...prev, defaultPort: e.target.value })); setSaveErrors(prev => ({ ...prev, defaultPort: '' })) }} onBlur={e => saveSetting('defaultPort', e.target.value)} aria-invalid={Boolean(saveErrors.defaultPort)} min='1' max='65535' />
           </div>
           <div className='form-group'>
-            <label className='form-label'>默认协议</label>
-            <select className='form-select' value={config.defaultProtocol} onChange={(e) => { setConfig(prev => ({ ...prev, defaultProtocol: e.target.value })); saveSetting('defaultProtocol', e.target.value); setSaveErrors(prev => ({ ...prev, defaultProtocol: '' })) }}>
+            <label className='form-label' htmlFor='settings-field-2'>默认协议</label>
+            <select id='settings-field-2' className='form-select' value={config.defaultProtocol} onChange={(e) => { setConfig(prev => ({ ...prev, defaultProtocol: e.target.value })); saveSetting('defaultProtocol', e.target.value); setSaveErrors(prev => ({ ...prev, defaultProtocol: '' })) }}>
               <option value='auto'>自动 (auto)</option>
               <option value='http'>HTTP</option>
               <option value='https'>HTTPS</option>

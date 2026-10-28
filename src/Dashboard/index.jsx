@@ -22,6 +22,8 @@ export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onR
     } catch (e) { return null }
   })
   const logEndRef = useRef(null)
+  const startPending = useRef(false)
+  const [starting, setStarting] = useState(false)
 
   // 保存 tab 记忆（本地存储）
   useEffect(() => {
@@ -38,9 +40,9 @@ export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onR
   // 日志 + 事件监听
   useEffect(() => {
     const history = window.services?.getLogBuffer() || []
-    setLogs(history.map(h => ({ ...h, time: new Date(h.time) })))
+    setLogs(history.slice(-500).map(h => ({ ...h, time: new Date(h.time) })))
 
-    const onEntry = (e) => setLogs(prev => [...prev, { ...e.detail, time: new Date(e.detail.time) }])
+    const onEntry = (e) => setLogs(prev => [...prev.slice(-499), { ...e.detail, time: new Date(e.detail.time) }])
     const onLoginDone = (e) => {
       setLoginCode(null)
       if (e.detail.success) {
@@ -123,37 +125,32 @@ export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onR
     })
   }, [onRefresh, showToast])
 
-  const handleStart = useCallback(async (e, tunnel) => {
+  const handleStart = useCallback(async (e, selected) => {
     e.stopPropagation()
-    // 获取最新端口信息
-    let latestTunnel = tunnel
-    let port = tunnel.ports?.[0]?.portNumber
+    if (startPending.current) return
+    startPending.current = true
+    setStarting(true)
     try {
-      const full = await window.services.getTunnelWithPorts(tunnel.tunnelId)
-      if (full) {
-        latestTunnel = full
-        port = full.ports?.[0]?.portNumber || port
+      const services = window.services
+      const latest = await services.getTunnelWithPorts(selected.tunnelId)
+      if (!latest) throw new Error('读取最新隧道配置失败，请重试')
+      const currentPort = latest.ports?.[0]?.portNumber
+      if (!currentPort) throw new Error('请先配置端口')
+      if (services.getHostStatus()?.running) throw new Error('已有隧道在运行，请先停止')
+      const description = latest.description || ''
+      if (description.startsWith('代理目录: ')) {
+        const result = await services.startFileServer(description.slice('代理目录: '.length), currentPort)
+        if (!result?.success) throw new Error('文件服务器启动失败: ' + (result?.message || '未知错误'))
       }
-    } catch (err) {}
-    if (!port) { showToast('请先配置端口', 'error'); return }
-
-    // 代理目录隧道：先启动本地文件服务器
-    const desc = latestTunnel.description || ''
-    if (desc.startsWith('代理目录: ')) {
-      const dirPath = desc.replace('代理目录: ', '')
-      const fsResult = await window.services.startFileServer(dirPath, port)
-      if (!fsResult.success) {
-        showToast('文件服务器启动失败: ' + fsResult.message, 'error')
-        return
-      }
-    }
-
-    const result = await window.services.startHost(latestTunnel.tunnelId, port)
-    syncHostStatus()
-    if (result.success) {
+      const result = await services.startHost(latest.tunnelId, currentPort)
+      syncHostStatus()
+      if (!result?.success) throw new Error(result?.message || '进程未能启动')
       showToast('启动中...')
-    } else {
-      showToast('启动失败: ' + result.message, 'error')
+    } catch (error) {
+      showToast('启动失败: ' + error.message, 'error')
+    } finally {
+      startPending.current = false
+      setStarting(false)
     }
   }, [showToast, syncHostStatus])
 
@@ -353,7 +350,7 @@ export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onR
                               </button>
                               )
                             : (
-                              <button className='icon-btn icon-btn-start' onClick={(e) => handleStart(e, tunnel)} title='启动'>
+                              <button className='icon-btn icon-btn-start' disabled={starting} onClick={(e) => handleStart(e, tunnel)} title='启动'>
                                 <svg width='18' height='18' viewBox='0 0 24 24' fill='currentColor'>
                                   <polygon points='5,3 19,12 5,21' />
                                 </svg>

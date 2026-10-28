@@ -47,9 +47,9 @@ export default function AboutPage ({ onToggleSidebar }) {
           <div className='about-card'>
             <div className='about-card-title'><Lock size={16} /> 隐私与数据</div>
             <ul className='about-list'>
-              <li>插件配置优先保存在 uTools 本地存储或本地数据库中，路径、frpc 路径等本机相关配置不会主动同步。</li>
+              <li>默认值、FRP 服务器和代理规则沿用 uTools 数据同步；文件路径和目录设置按设备 ID 隔离取值。</li>
               <li>DevTunnel 登录使用官方 CLI 的设备代码流程；插件不接触、不保存你的账号密码。</li>
-              <li>Frp Token 保存在本地存储中，不随 uTools 数据库同步；运行日志中会做脱敏显示。</li>
+              <li>Frp Token 按设备 ID 隔离，仍存储在参与 uTools 同步的 dbStorage 中，不代表仅保存在本机；运行日志会做脱敏显示。</li>
               <li>启动穿透后，你暴露的服务会按所选通道对外可访问，请确认本地服务本身的鉴权和内容安全。</li>
             </ul>
           </div>

@@ -61,6 +61,7 @@ test('same tick double start is serialized and pending fields/modes are disabled
   const ui = await ready({ listTunnels: () => { listed++; return wait.promise } })
   const start = ui.button('启动代理').props.onClick
   const first = start(), second = start()
+  await tick()
   ui.render()
   assert.equal(listed, 1)
   assert.ok(ui.button('Frp（自建服务器）').props.disabled)
@@ -239,4 +240,68 @@ test('ordinary DevTunnel host events cannot replace an active FRP directory serv
   await ui.settle()
   await ui.click('停止代理')
   assert.equal(ui.calls.some(call => call[0] === 'stopHost'), false)
+})
+
+test('取消复用确认保留当前运行的隧道和文件服务', async () => {
+  const ui = await ready({ listTunnels: async () => [existing(2000)] })
+  ui.setStatus({ host: { running: true, tunnelId: 'working' } })
+  await ui.click('启动代理')
+  assert.ok(ui.modal())
+  assert.equal(ui.calls.some(call => call[0] === 'stopHost'), false)
+  ui.modal().props.onCancel()
+  await ui.settle()
+  assert.equal(ui.services.getHostStatus().running, true)
+  assert.equal(ui.calls.length, 0)
+})
+
+test('目录或隧道列表预检失败不停止旧进程、不创建资源', async () => {
+  for (const overrides of [
+    { listTunnels: async () => { throw new Error('list unavailable') } },
+    { validateFileServerDirectory: async () => ({ success: false, message: 'directory unavailable' }) }
+  ]) {
+    const ui = await ready(overrides)
+    ui.setStatus({ host: { running: true, tunnelId: 'working' } })
+    await ui.click('启动代理')
+    assert.equal(ui.calls.length, 0)
+    assert.match(ui.text, /unavailable/)
+  }
+})
+
+test('复用确认期间隧道配置发生变化时中止，保留原运行进程', async () => {
+  const ui = await ready({ listTunnels: async () => [existing(2000)], getTunnelWithPorts: async () => existing(4000) })
+  ui.setStatus({ host: { running: true, tunnelId: 'working' } })
+  await ui.click('启动代理')
+  await confirm(ui)
+  assert.equal(ui.calls.length, 0)
+  assert.match(ui.text, /配置已变化/)
+})
+
+test('FRP 配置冲突和目录校验失败都不能停止当前 DevTunnel', async () => {
+  for (const overrides of [
+    { getProxyDirFrpSettings: () => ({ remotePort: '7000' }) },
+    { validateFileServerDirectory: async () => ({ success: false, message: 'directory unavailable' }) }
+  ]) {
+    const ui = await ready(overrides, { mode: 'frp' })
+    ui.setStatus({ host: { running: true, tunnelId: 'working' } })
+    await ui.click('启动代理')
+    assert.equal(ui.calls.length, 0)
+    assert.match(ui.text, /冲突|unavailable/)
+  }
+})
+
+test('FRP 预检遇到其他页面的进程时，不误显示为目录代理运行中', async () => {
+  const ui = await ready({ getFrpcStatus: () => ({ running: true, source: 'frp' }) }, { mode: 'frp' })
+  await ui.click('启动代理')
+  assert.equal(ui.calls.length, 0)
+  assert.ok(ui.button('启动代理'))
+  assert.match(ui.text, /frpc 已在运行/)
+})
+
+test('FRP 目录恢复和事件更新均生成带 HTTP 协议的 URL，支持 IPv6', async () => {
+  const runtime = { running: true, state: 'running', source: 'proxydir', serverAddr: '2001:db8::1', proxies: [{ name: 'directory', type: 'tcp', remotePort: 8080, status: 'running' }] }
+  const ui = await ready({ getFrpcStatus: () => runtime })
+  assert.match(ui.text, /http:\/\/\[2001:db8::1\]:8080/)
+  ui.emit('frpc-status', { ...runtime, serverAddr: 'example.com' })
+  await ui.settle()
+  assert.match(ui.text, /http:\/\/example.com:8080/)
 })

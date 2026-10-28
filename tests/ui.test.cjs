@@ -16,7 +16,7 @@ const deferred = () => {
 const tick = async () => { for (let i = 0; i < 12; i++) await Promise.resolve() }
 
 // A minimal hook host runs the real JSX, effects and event handlers without a DOM.
-function mount (file, overrides = {}, suppliedProps = {}) {
+function mount (file, overrides = {}, suppliedProps = {}, environment = {}) {
   const slots = []
   const pendingEffects = []
   const listeners = new Map()
@@ -60,6 +60,7 @@ function mount (file, overrides = {}, suppliedProps = {}) {
     set: value => { hostIdWrites++; hostId = value }
   })
   const hooks = {
+    useId () { return 'test-id-' + cursor++ },
     useState (initial) {
       const index = cursor++
       if (!(index in slots)) slots[index] = { value: typeof initial === 'function' ? initial() : initial }
@@ -99,8 +100,8 @@ function mount (file, overrides = {}, suppliedProps = {}) {
   }
   const sandbox = {
     module: { exports: {} }, exports: {}, window, h, Fragment: 'Fragment',
-    document: { activeElement: { blur: () => { blurCount++ } } },
-    console, setTimeout: () => 0,
+    document: environment.document || { activeElement: { blur: () => { blurCount++ } } },
+    console, setTimeout: () => 0, clearTimeout: () => {},
     require: name => name === 'react' ? hooks : name === 'lucide-react' ? {} : { __esModule: true, default: name }
   }
   vm.runInNewContext(sourceCache.get(file), sandbox, { filename: file })
@@ -561,3 +562,108 @@ for (const file of ['src/Dashboard/index.jsx', 'src/TunnelDetail/index.jsx']) {
     assert.equal(ui.hostIdWrites, 0)
   })
 }
+
+
+for (const file of ['src/Dashboard/index.jsx', 'src/TunnelDetail/index.jsx']) {
+  test(file + ': 启动前详情读取失败或无端口时拒绝旧配置，避免分享历史目录', async () => {
+    for (const getTunnelWithPorts of [async () => null, async () => { throw new Error('offline') }, async () => ({ ...tunnel, ports: [] })]) {
+      const starts = []
+      const directory = { ...tunnel, description: '代理目录: C:/old' }
+      const ui = mount(file, {
+        getTunnelWithPorts,
+        startFileServer: async () => { starts.push('file'); return { success: true } },
+        startHost: async () => { starts.push('host'); return { success: true } }
+      }, { tunnel: directory, tunnels: [directory] })
+      ui.effects(); await ui.settle(); await ui.click('启动')
+      assert.equal(starts.length, 0)
+      assert.equal(ui.toasts.at(-1)[1], 'error')
+    }
+  })
+
+  test(file + ': 持续日志限制为最新 500 条', async () => {
+    const ui = mount(file)
+    ui.effects(); await ui.settle()
+    for (let i = 0; i < 1500; i++) ui.emit('tunnel-log-entry', { text: String(i), time: Date.now() })
+    ui.render()
+    if (file.includes('Dashboard')) {
+      ui.nodes(node => node.type === 'button' && node.props.className?.startsWith('tab-item'))[1].props.onClick()
+      await ui.settle()
+    }
+    assert.equal(ui.nodes(node => node.props.className?.startsWith('log-line ')).length, 500)
+  })
+}
+
+test('App 刷新失败保留已加载列表，并报告失败', async () => {
+  let reads = 0
+  const ui = mount('src/App.jsx', { listTunnels: async () => { if (++reads > 1) throw new Error('offline'); return [tunnel] } })
+  ui.effects(); ui.enter(); await ui.settle()
+  await ui.nodes(node => node.type === './Dashboard')[0].props.onRefresh()
+  await ui.settle()
+  assert.equal(ui.nodes(node => node.type === './Dashboard')[0].props.tunnels.length, 1)
+  assert.ok(ui.nodes(node => node.props.className === 'toast toast-error').length)
+})
+
+test('设置页不会把清除失败显示为成功', async () => {
+  const ui = mount('src/Settings/index.jsx', {
+    getConfig: () => ({ path: '', defaultPort: '80', defaultProtocol: 'auto', defaultAnonymous: true }),
+    getFrpcPath: () => '', clearAllData: () => ({ success: false, message: '部分数据未清除：conflict' })
+  })
+  ui.effects(); await ui.settle(); await ui.click('清除所有数据')
+  await ui.nodes(node => node.type === '../ConfirmModal')[0].props.onConfirm()
+  await ui.settle()
+  assert.equal(ui.toasts.at(-1)[1], 'error')
+  assert.match(ui.toasts.at(-1)[0], /conflict/)
+})
+
+test('FRP 启动前重读服务器配置，代理版本变化时先刷新供用户确认', async () => {
+  let revision = '1'
+  const starts = []
+  const ui = await frpUi({
+    getFrpConfig: async () => ({ revision, server: { serverAddr: revision === '1' ? 'old.example' : 'new.example', serverPort: 7000 }, proxies: [{ name: 'web', type: 'tcp', localPort: 3000, remotePort: 6000 }] }),
+    startFrpc: async (...args) => { starts.push(args); return { success: true } }
+  })
+  ui.nodes(node => node.type === 'input' && node.props['aria-label'] === '选择代理 web')[0].props.onChange({ target: { checked: true } })
+  await ui.settle()
+  revision = '2'
+  await ui.click('启动选中 (1)')
+  assert.equal(starts.length, 0)
+  assert.match(ui.toasts.at(-1)[0], /同步更新/)
+  await ui.click('启动选中 (1)')
+  assert.equal(starts[0][0].serverAddr, 'new.example')
+})
+
+test('确认框支持焦点循环、Escape、恢复焦点和待处理状态防重入', async () => {
+  let keydown, restored = 0, cancelled = 0, confirmed = 0
+  const document = {
+    activeElement: { isConnected: true, focus: () => { restored++ } },
+    addEventListener: (_name, callback) => { keydown = callback },
+    removeEventListener: () => { keydown = null }
+  }
+  const pending = deferred()
+  const ui = mount('src/ConfirmModal/index.jsx', {}, {
+    title: '删除配置', message: '确认删除', danger: true,
+    onCancel: () => { cancelled++ }, onConfirm: async () => { confirmed++; await pending.promise }
+  }, { document })
+  const buttons = [{ focus () { document.activeElement = this } }, { focus () { document.activeElement = this } }]
+  const dialog = ui.nodes(node => node.props.role === 'dialog')[0]
+  dialog.props.ref.current = { querySelector: () => buttons[0], querySelectorAll: () => buttons, contains: value => buttons.includes(value) }
+  ui.effects()
+  assert.equal(document.activeElement, buttons[0])
+  keydown({ key: 'Tab', shiftKey: true, preventDefault () {} })
+  assert.equal(document.activeElement, buttons[1])
+  keydown({ key: 'Tab', shiftKey: false, preventDefault () {} })
+  assert.equal(document.activeElement, buttons[0])
+  keydown({ key: 'Escape', preventDefault () {} })
+  assert.equal(cancelled, 1)
+  const confirm = ui.button('确定').props.onClick
+  const first = confirm(), second = confirm()
+  ui.render()
+  keydown({ key: 'Escape', preventDefault () {} })
+  assert.equal(cancelled, 1)
+  assert.equal(confirmed, 1)
+  assert.equal(ui.button('处理中…').props.disabled, true)
+  pending.resolve(); await Promise.all([first, second])
+  ui.unmount()
+  assert.equal(restored, 1)
+  assert.equal(keydown, null)
+})

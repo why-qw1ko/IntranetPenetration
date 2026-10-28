@@ -1,16 +1,34 @@
 const { spawn, execFile } = require('child_process')
-const http = require('http')
 const path = require('path')
 const fs = require('fs')
 const os = require('os')
 const { getLocal, setLocal, removeLocal } = require('./storage')(window.utools)
 const { validateServer, validateProxies, generateFrpcConfig } = require('./frp')
-const { watchOutput, stopProcess } = require('./process-utils')
+const { watchOutput } = require('./process-utils')
+const { normalizeTunnelId, normalizeTunnel, extractTunnelIdFromText, parseTunnelsFromText, parseTunnelDetailFromText, parsePortsFromText, parseTunnelList, parsePortList, pickConnectUrl } = require('./devtunnel-parser')
+const fileController = require('./file-server')({
+  log: (type, text, mode) => mode === 'frp' ? addFrpcLog(type, text, 'proxydir') : addLog(type, text),
+  onStarted: detail => window.dispatchEvent(new CustomEvent('fileserver-started', { detail }))
+})
+const devtunnelController = require('./devtunnel')({
+  spawn,
+  platform: process.platform,
+  getPath: getDevTunnelPath,
+  decodeOutput,
+  pickConnectUrl,
+  formatCommand,
+  log: addLog,
+  fileController,
+  emit: (name, detail) => window.dispatchEvent(new CustomEvent(name, { detail })),
+  onRunningTunnel: id => { window.__runningTunnelId = id }
+})
 const frpcController = require('./frpc')({
-  spawn, platform: process.platform,
+  spawn,
+  platform: process.platform,
   getPath: () => window.services.getFrpcPath(),
   generateConfig: (...args) => window.services.generateFrpcConfig(...args),
-  log: addFrpcLog, emit: dispatchFrpcEvent,
+  log: addFrpcLog,
+  emit: dispatchFrpcEvent,
   stopFileServer: mode => window.services.stopFileServer(mode)
 })
 
@@ -45,7 +63,7 @@ function migrateIfNeeded () {
     }
   } catch (e) {}
 
-  // 迁移 frp token 到本地存储，避免随 uTools db 云同步
+  // Token 改用设备隔离键，不再写入共享服务器文档；dbStorage 仍参与同步。
   try {
     const doc = window.utools.db.get('frp-config')
     if (doc?.server?.token) {
@@ -98,15 +116,7 @@ function migrateIfNeeded () {
   }
 }
 
-let hostProcess = null
-let hostPid = null
-let hostTunnelId = null
 let logBuffer = []
-let hostStopping = null
-let fileServer = null
-let fileServerPort = null
-let fileServerDir = null
-let fileServerMode = null
 let frpcLogBuffer = []
 
 // ==================== 初始化 ====================
@@ -230,344 +240,11 @@ function dispatchFrpcEvent (name, detail, source) {
   window.dispatchEvent(new CustomEvent(name, { detail: { ...detail, source } }))
 }
 
-function escapeHtml (value) {
-  return String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-}
-
-function isPathInside (rootPath, targetPath) {
-  const relativePath = path.relative(rootPath, targetPath)
-  return relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath))
-}
-
-function tomlString (value) {
-  return JSON.stringify(String(value || ''))
-}
-
 function toPortNumber (value, fallback) {
   const input = value === undefined || value === '' ? fallback : value
   const num = Number(input)
   if (!/^[0-9]+$/.test(String(input)) || !Number.isInteger(num) || num < 1 || num > 65535) throw new Error('端口号必须是 1-65535 之间的整数')
   return num
-}
-
-function hasAnonymousConnectAccess (text) {
-  return /\+Anonymous\s*\[[^\]]*\bconnect\b[^\]]*\]/i.test(String(text || ''))
-}
-
-function extractDevTunnelUrls (text) {
-  const input = String(text || '')
-  const matches = input.match(/https:\/\/[^\s<>"')\]]+?\.devtunnels\.ms\/?/gi) || []
-  return matches.map(url => url.replace(/[),.;]+$/g, '')).filter(Boolean)
-}
-
-function pickConnectUrl (text, port) {
-  const urls = extractDevTunnelUrls(text).filter(url => !/-inspect(?:\.|\/|$)/i.test(url))
-  if (!urls.length) return ''
-  const portText = port ? String(port) : ''
-  if (portText) {
-    const exact = urls.find(url => (
-      url.includes(`-${portText}.devtunnels.ms`) ||
-      url.includes(`-${portText}.`) ||
-      url.includes(`:${portText}/`) ||
-      url.endsWith(`:${portText}`)
-    ))
-    if (exact) return exact
-  }
-  return urls[0]
-}
-
-/**
- * 从 devtunnel 输出中提取 JSON。新版 CLI 不再公开 -j 参数；此函数只作为兼容旧输出的兜底。
- */
-function extractJson (text) {
-  const input = String(text || '').trim()
-  try { return JSON.parse(input) } catch (e) {}
-  if (!/^\s*(?:\[|\{)/.test(input)) throw new Error('无法解析 JSON: ' + input.substring(0, 200))
-  const arrayMatch = input.match(/^\s*(\[[\s\S]*\])\s*$/)
-  if (arrayMatch) { try { return JSON.parse(arrayMatch[1]) } catch (e) {} }
-  const objMatch = input.match(/^\s*(\{[\s\S]*\})\s*$/)
-  if (objMatch) { try { return JSON.parse(objMatch[1]) } catch (e) {} }
-  throw new Error('无法解析 JSON: ' + input.substring(0, 200))
-}
-
-const TUNNEL_ID_RE = /^[a-z0-9][a-z0-9-]{2,}(?:\.[a-z0-9][a-z0-9-]*)?$/i
-const RESERVED_TUNNEL_WORDS = new Set([
-  'tunnel', 'tunnels', 'created', 'updated', 'deleted', 'delete', 'show',
-  'port', 'ports', 'hosting', 'host', 'https', 'http', 'cluster', 'status',
-  'description', 'expires', 'expiration', 'none', 'true', 'false',
-  'welcome', 'report', 'issues', 'github', 'devtunnels', 'microsoft'
-])
-
-function cleanCliValue (value) {
-  return String(value || '')
-    .trim()
-    .replace(/^[`'"]+|[`'",;]+$/g, '')
-    .replace(/\/+$/g, '')
-}
-
-function normalizeTunnelId (value) {
-  const id = cleanCliValue(value)
-  if (!TUNNEL_ID_RE.test(id) || RESERVED_TUNNEL_WORDS.has(id.toLowerCase())) return ''
-  return id
-}
-
-function isCliNoiseLine (line) {
-  return /^(welcome\s+to\s+dev\s+tunnels!?|report\s+issues\s+on\s+github|https?:\/\/aka\.ms\/devtunnels)/i.test(String(line || '').trim())
-}
-
-function isTunnelListHeaderLine (line) {
-  const text = String(line || '').trim()
-  return /^[-=]+$/.test(text) || /^(?:tunnel\s+id|id|隧道\s*id)(?:\s|$)/i.test(text)
-}
-
-function extractTunnelIdFromText (text) {
-  const input = String(text || '')
-  const urlMatch = input.match(/https:\/\/([a-z0-9-]+?)(?:-\d+)?(?:\.([a-z0-9-]+))?\.devtunnels\.ms/i)
-  if (urlMatch) return normalizeTunnelId(urlMatch[2] ? `${urlMatch[1]}.${urlMatch[2]}` : urlMatch[1])
-
-  const idPattern = '([a-z0-9][a-z0-9-]{2,}(?:\\.[a-z0-9][a-z0-9-]*)?)'
-  const labeledMatch = input.match(new RegExp('(?:^|\\n)\\s*(?:tunnel\\s*id|tunnelid|隧道\\s*id)\\s*[:=：]\\s*' + idPattern, 'i'))
-  if (labeledMatch) return normalizeTunnelId(labeledMatch[1])
-
-  const createdMatch = input.match(new RegExp('(?:created|updated|deleted|hosting|set\\s+default\\s+tunnel\\s+to)\\D{0,80}(?:tunnel\\D+)?' + idPattern + '(?=\\s|$|,|\\.)', 'i'))
-  if (createdMatch) return normalizeTunnelId(createdMatch[1])
-
-  return normalizeTunnelId(input)
-}
-
-function getObjectArray (data) {
-  if (Array.isArray(data)) return data
-  if (!data || typeof data !== 'object') return []
-  if (Array.isArray(data.tunnels)) return data.tunnels
-  if (Array.isArray(data.value)) return data.value
-  if (Array.isArray(data.items)) return data.items
-  if (data.tunnel && typeof data.tunnel === 'object') return [data.tunnel]
-  if (data.tunnelId || data.tunnel_id || data.id || data.name) return [data]
-  return []
-}
-
-function splitCliColumns (line) {
-  return String(line || '')
-    .replace(/^\|/, '')
-    .replace(/\|$/, '')
-    .split(/\s{2,}|\t+|\s*\|\s*/)
-    .map(part => part.trim())
-    .filter(Boolean)
-}
-
-function isExpirationText (value) {
-  const text = cleanCliValue(value).toLowerCase()
-  return /^(?:\d+\s*(?:days?|day|d|hours?|hour|h|minutes?|minute|m)|expired|never|none|session)$/.test(text)
-}
-
-function tunnelFromListColumns (columns) {
-  const tunnelId = normalizeTunnelId(columns[0])
-  if (!tunnelId) return null
-  const rest = columns.slice(1)
-  let description = ''
-  let expiration = ''
-  if (rest.length === 1) {
-    if (isExpirationText(rest[0])) expiration = cleanCliValue(rest[0])
-    else description = cleanCliValue(rest[0])
-  } else if (rest.length > 1) {
-    const last = rest[rest.length - 1]
-    const previous = rest[rest.length - 2]
-    if (isExpirationText(previous)) {
-      expiration = cleanCliValue(previous)
-      description = cleanCliValue(last)
-    } else if (isExpirationText(last)) {
-      expiration = cleanCliValue(last)
-    } else {
-      description = cleanCliValue(last)
-    }
-  }
-  return { tunnelId, description, expiration, ports: [] }
-}
-
-function parseKeyValueLines (text) {
-  const values = {}
-  for (const rawLine of String(text || '').split(/\r?\n/)) {
-    const line = rawLine.trim()
-    const match = line.match(/^([^:=：]{1,40})\s*[:=：]\s*(.*)$/)
-    if (!match) continue
-    const key = match[1].trim().toLowerCase().replace(/\s+/g, '')
-    values[key] = cleanCliValue(match[2])
-  }
-  return values
-}
-
-function parseTunnelDetailBlock (text) {
-  const values = parseKeyValueLines(text)
-  const tunnelId = normalizeTunnelId(values.tunnelid || values['隧道id'])
-  if (!tunnelId) return null
-  const access = values.accesscontrol || values.access || values['访问控制'] || values['访问'] || ''
-  return normalizeTunnel({
-    tunnelId,
-    description: values.description || values.desc || values['描述'] || '',
-    labels: values.labels || values['标签'] || '',
-    access,
-    anonymous: hasAnonymousConnectAccess(access),
-    expiration: values.tunnelexpiration || values.expiration || values.expires || values['过期时间'] || '',
-    ports: parsePortsFromText(text)
-  })
-}
-
-function parseTunnelDetailBlocks (text) {
-  const blocks = []
-  let current = []
-  for (const rawLine of String(text || '').split(/\r?\n/)) {
-    const line = rawLine.trimEnd()
-    if (/^\s*(?:tunnel\s*id|隧道\s*id)\s*[:=：]/i.test(line)) {
-      if (current.length) blocks.push(current.join('\n'))
-      current = [line]
-      continue
-    }
-    if (current.length) current.push(line)
-  }
-  if (current.length) blocks.push(current.join('\n'))
-  return blocks.map(parseTunnelDetailBlock).filter(Boolean)
-}
-
-function parseTunnelsFromText (text) {
-  const input = String(text || '')
-  try {
-    const data = extractJson(input)
-    const tunnels = getObjectArray(data)
-    return tunnels.map(normalizeTunnel).filter(t => t.tunnelId)
-  } catch (e) {}
-
-  const detailBlocks = parseTunnelDetailBlocks(input)
-  if (detailBlocks.length) return detailBlocks
-
-  const seen = new Set()
-  const tunnels = []
-  const addTunnel = (id, description = '') => {
-    const tunnelId = normalizeTunnelId(id)
-    if (!tunnelId || seen.has(tunnelId)) return
-    seen.add(tunnelId)
-    tunnels.push({ tunnelId, description: cleanCliValue(description), ports: [] })
-  }
-
-  const urlRegex = /https:\/\/([a-z0-9-]+?)(?:-\d+)?(?:\.([a-z0-9-]+))?\.devtunnels\.ms/gi
-  let match
-  while ((match = urlRegex.exec(input))) addTunnel(match[2] ? `${match[1]}.${match[2]}` : match[1])
-
-  for (const rawLine of input.split(/\r?\n/)) {
-    const line = rawLine.trim()
-    if (!line || isCliNoiseLine(line) || isTunnelListHeaderLine(line)) continue
-    const columns = splitCliColumns(line)
-    const tableTunnel = columns.length > 1 && !line.includes(':') ? tunnelFromListColumns(columns) : null
-    if (tableTunnel) {
-      addTunnel(tableTunnel.tunnelId, tableTunnel.description)
-      const current = tunnels[tunnels.length - 1]
-      if (current) current.expiration = tableTunnel.expiration
-      continue
-    }
-    const id = columns.length <= 1 ? extractTunnelIdFromText(line) : ''
-    if (id) {
-      const description = line.replace(id, '').trim().replace(/^[:|\s-]+/, '')
-      addTunnel(id, description)
-    }
-  }
-
-  return tunnels
-}
-
-function normalizeTunnel (tunnel) {
-  if (!tunnel) return { tunnelId: '', ports: [] }
-  const tunnelId = normalizeTunnelId(tunnel.tunnelId || tunnel.tunnel_id || tunnel.id || extractTunnelIdFromText(tunnel.name || ''))
-  const ports = Array.isArray(tunnel.ports) ? tunnel.ports.map(normalizePort).filter(Boolean) : []
-  return {
-    ...tunnel,
-    tunnelId,
-    description: tunnel.description ?? tunnel.desc ?? tunnel.descriptionText ?? '',
-    ports
-  }
-}
-
-function parsePortsFromText (text) {
-  const input = String(text || '')
-  try {
-    const data = extractJson(input)
-    if (Array.isArray(data)) return data.map(normalizePort).filter(Boolean)
-    if (data && Array.isArray(data.ports)) return data.ports.map(normalizePort).filter(Boolean)
-    if (data && (data.portNumber || data.port)) return [normalizePort(data)].filter(Boolean)
-  } catch (e) {}
-
-  const ports = []
-  const seen = new Set()
-  const addPort = (portNumber, protocol = 'auto') => {
-    const num = Number(portNumber)
-    if (!Number.isInteger(num) || num < 1 || num > 65535 || seen.has(num)) return
-    seen.add(num)
-    ports.push({ portNumber: num, protocol: protocol || 'auto' })
-  }
-
-  for (const rawLine of input.split(/\r?\n/)) {
-    const line = rawLine.trim()
-    if (!line || /^[-=]+$/.test(line) || /^---/i.test(line)) continue
-    const protocolMatch = line.match(/\b(http|https|auto)\b/i)
-    const labeledMatch = line.match(/^(?:port|portnumber|port\s*number|端口|端口号)\s*[:=：]\s*(\d{1,5})\b/i)
-    const portsMatch = line.match(/^(?:ports|端口列表)\s*[:=：]\s*(.+)$/i)
-    const rowMatch = line.replace(/^\|/, '').trim().match(/^(\d{1,5})(?=\s|$|,|\||\)|\()/)
-
-    if (labeledMatch) {
-      addPort(labeledMatch[1], protocolMatch ? protocolMatch[1].toLowerCase() : 'auto')
-      continue
-    }
-    if (portsMatch) {
-      const value = portsMatch[1].trim()
-      if (/^\d+$/.test(value)) continue
-      const numbers = value.match(/\b\d{1,5}\b/g) || []
-      numbers.forEach(num => addPort(num, protocolMatch ? protocolMatch[1].toLowerCase() : 'auto'))
-      continue
-    }
-    if (!rowMatch) continue
-    addPort(rowMatch[1], protocolMatch ? protocolMatch[1].toLowerCase() : 'auto')
-  }
-
-  const urlRegex = /https:\/\/[a-z0-9-]+-(\d+)(?:\.[a-z0-9-]+)?\.devtunnels\.ms/gi
-  let match
-  while ((match = urlRegex.exec(input))) addPort(match[1], 'http')
-
-  return ports
-}
-
-function normalizePort (port) {
-  const portNumber = Number(port.portNumber || port.port || port.number)
-  if (!Number.isInteger(portNumber) || portNumber < 1 || portNumber > 65535) return null
-  return { ...port, portNumber, protocol: port.protocol || 'auto' }
-}
-
-function parseTunnelDetailFromText (text, fallbackTunnelId = '') {
-  const parsed = normalizeTunnel(parseTunnelsFromText(text)[0] || {})
-  const values = parseKeyValueLines(text)
-  const tunnelId = normalizeTunnelId(
-    values.tunnelid ||
-    values.id ||
-    values['隧道id'] ||
-    fallbackTunnelId ||
-    parsed.tunnelId ||
-    extractTunnelIdFromText(text)
-  )
-  const description = values.description || values.desc || values['描述'] || parsed.description || ''
-  const ports = parsePortsFromText(text)
-  const access = values.accesscontrol || values.access || values['访问控制'] || values['访问'] || parsed.access
-  return normalizeTunnel({
-    ...parsed,
-    tunnelId,
-    description,
-    cluster: values.cluster || values['群集'] || parsed.cluster,
-    access,
-    anonymous: hasAnonymousConnectAccess(access),
-    expiration: values.expiration || values.expires || values.tunnelexpiration || values['过期时间'] || parsed.expiration,
-    ports: ports.length ? ports : parsed.ports
-  })
 }
 
 async function setAnonymousAccess (tunnelId, allow) {
@@ -736,23 +413,18 @@ window.services = {
     try {
       const result = await runCommand(['list'])
       addLog('stdout', result)
-      const tunnels = parseTunnelsFromText(result)
+      const tunnels = parseTunnelList(result)
 
-      // 并发获取每个隧道的端口详情
+      // 任一详情读取失败时终止本轮查询，不能将失败解释成无端口。
       const detailed = await Promise.all(tunnels.map(async (t) => {
-        try {
-          const ports = await this.listPorts(t.tunnelId)
-          return { ...normalizeTunnel(t), ports: Array.isArray(ports) ? ports : [] }
-        } catch (e) {
-          return { ...normalizeTunnel(t), ports: [] }
-        }
+        const ports = await this.listPorts(t.tunnelId)
+        return { ...normalizeTunnel(t), ports }
       }))
-
 
       return detailed
     } catch (e) {
       addLog('error', '获取隧道列表失败: ' + e.message)
-      return []
+      throw e
     }
   },
 
@@ -760,8 +432,7 @@ window.services = {
     try {
       const detail = await this.showTunnel(tunnelId)
       const ports = await this.listPorts(tunnelId)
-      const parsedPorts = Array.isArray(ports) && ports.length ? ports : (Array.isArray(detail?.ports) ? detail.ports : [])
-      return normalizeTunnel({ ...detail, ports: parsedPorts })
+      return normalizeTunnel({ ...detail, ports })
     } catch (e) {
       addLog('error', '获取详情失败: ' + e.message)
       return null
@@ -772,13 +443,9 @@ window.services = {
     if (options.port !== undefined) toPortNumber(options.port)
     // 限制最多 2 个免费隧道
     const MAX_TUNNELS = 2
-    try {
-      const existing = await this.listTunnels()
-      if (existing.length >= MAX_TUNNELS) {
-        throw new Error('免费隧道数量已达上限（最多 ' + MAX_TUNNELS + ' 个），请先删除不需要的隧道')
-      }
-    } catch (e) {
-      if (e.message.includes('上限')) throw e
+    const existing = await this.listTunnels()
+    if (existing.length >= MAX_TUNNELS) {
+      throw new Error('免费隧道数量已达上限（最多 ' + MAX_TUNNELS + ' 个），请先删除不需要的隧道')
     }
 
     const createArgs = ['create']
@@ -849,7 +516,7 @@ window.services = {
     try {
       const id = normalizeTunnelId(tunnelId)
       if (!id) throw new Error('缺少有效的隧道 ID')
-      if (hostProcess && window.__runningTunnelId === id) {
+      if (this.getHostStatus().running && this.getHostStatus().tunnelId === id) {
         const stopped = await this.stopHost()
         if (!stopped.success) throw new Error(stopped.message)
       }
@@ -884,10 +551,10 @@ window.services = {
       if (!id) throw new Error('缺少有效的隧道 ID')
       const args = ['port', 'list', id]
       const result = await runCommand(args)
-      return parsePortsFromText(result)
+      return parsePortList(result)
     } catch (e) {
       addLog('error', '获取端口列表失败: ' + e.message)
-      return []
+      throw e
     }
   },
 
@@ -928,97 +595,7 @@ window.services = {
 
   // ==================== 隧道运行 ====================
 
-  tunnelUrlCache: {}, // 存储隧道URL
-
-  async startHost (tunnelId, port, allowAnonymous) {
-    if (hostProcess || hostStopping) return { success: false, message: '已有隧道在运行或停止中，请先停止' }
-    const args = ['host']
-    if (tunnelId) args.push(tunnelId)
-    else if (port) args.push('-p', String(port))
-    if (allowAnonymous === true) args.push('--allow-anonymous')
-    const ownedFile = fileServerMode === 'devtunnel' && Number(fileServerPort) === Number(port) ? fileServer : null
-    const cleanupFile = () => {
-      if (ownedFile && fileServer === ownedFile) this.stopFileServer('devtunnel')
-    }
-    addLog('system', formatCommand('devtunnel', args))
-    try {
-      const child = spawn(getDevTunnelPath(), args, { windowsHide: true })
-      hostProcess = child
-      hostPid = child.pid
-      hostTunnelId = tunnelId || null
-      let spawned = false
-      let closed = false
-      let settleStart
-      const flushStdout = watchOutput(child.stdout, decodeOutput, text => {
-        if (closed || hostProcess !== child) return
-        addLog('stdout', text)
-        window.dispatchEvent(new CustomEvent('tunnel-log', { detail: text }))
-        const url = pickConnectUrl(text, port)
-        if (url && tunnelId) {
-          this.tunnelUrlCache[tunnelId] = url
-          window.dispatchEvent(new CustomEvent('tunnel-url', { detail: { tunnelId, url } }))
-        }
-      })
-      const flushStderr = watchOutput(child.stderr, decodeOutput, text => {
-        if (closed || hostProcess !== child) return
-        addLog('stderr', text)
-        window.dispatchEvent(new CustomEvent('tunnel-error', { detail: text }))
-      })
-      const finish = (code, message) => {
-        if (closed || hostProcess !== child) return
-        flushStdout()
-        flushStderr()
-        closed = true
-        hostProcess = null
-        hostPid = null
-        hostTunnelId = null
-        window.__runningTunnelId = null
-        if (tunnelId) delete this.tunnelUrlCache[tunnelId]
-        cleanupFile()
-        addLog('system', '进程退出 (code: ' + code + ')')
-        window.dispatchEvent(new CustomEvent('tunnel-host-status', { detail: this.getHostStatus() }))
-        window.dispatchEvent(new CustomEvent('tunnel-exit', { detail: { code, tunnelId } }))
-        if (!spawned) settleStart?.({ success: false, message: message || 'devtunnel 已在启动时退出 (code: ' + code + ')' })
-      }
-      child.once('close', code => finish(code))
-      return await new Promise(resolve => {
-        settleStart = resolve
-        child.once('spawn', () => {
-          if (closed || hostProcess !== child) return
-          spawned = true
-          window.__runningTunnelId = tunnelId || null
-          window.dispatchEvent(new CustomEvent('tunnel-host-status', { detail: this.getHostStatus() }))
-          resolve({ success: true, pid: child.pid })
-        })
-        child.on('error', err => {
-          if (closed || hostProcess !== child) return
-          addLog('error', '进程错误: ' + err.message)
-          window.dispatchEvent(new CustomEvent('tunnel-error', { detail: err.message }))
-          if (!spawned) finish(-1, err.message)
-        })
-      })
-    } catch (err) {
-      cleanupFile()
-      return { success: false, message: err.message }
-    }
-  },
-
-  async stopHost () {
-    if (hostStopping) return hostStopping
-    if (!hostProcess) return { success: false, message: '没有运行中的隧道' }
-    const child = hostProcess
-    addLog('system', '正在停止...')
-    hostStopping = stopProcess(child, spawn, process.platform).finally(() => { hostStopping = null })
-    return hostStopping
-  },
-
-  getHostStatus () {
-    return { running: hostProcess !== null, pid: hostPid, tunnelId: hostTunnelId }
-  },
-
-  getTunnelUrl (tunnelId) {
-    return this.tunnelUrlCache[tunnelId] || ''
-  },
+  ...devtunnelController,
 
   // ==================== 日志 ====================
 
@@ -1087,6 +664,7 @@ window.services = {
   // ==================== 清除所有数据 ====================
 
   clearAllData () {
+    const failures = []
     // 清除本地存储
     const localKeys = [
       'devtunnel-path', 'frpc-path',
@@ -1095,17 +673,25 @@ window.services = {
       'dashboard-tab', 'frp-tab',
       'proxydir-last-dir', 'proxydir-last-tunnel', 'proxydir-frp-settings'
     ]
-    for (const key of localKeys) removeLocal(key)
+    for (const key of localKeys) {
+      try { removeLocal(key) } catch (error) { failures.push(key + ': ' + error.message) }
+    }
     // 清除云同步 db
     const cloudKeys = ['devtunnel-config', 'frp-config', 'devtunnel-logs', 'frpc-logs', 'proxydir-last-dir', 'proxydir-last-tunnel', 'proxydir-frp-settings', 'dashboard-tab', 'frp-tab']
     for (const key of cloudKeys) {
       try {
         const doc = window.utools.db.get(key)
-        if (doc) window.utools.db.remove(doc)
-      } catch (e) {}
+        if (doc) {
+          const result = window.utools.db.remove(doc)
+          if (!result?.ok) throw new Error(result?.message || '删除未成功')
+        }
+      } catch (error) { failures.push(key + ': ' + error.message) }
     }
     logBuffer = []
     frpcLogBuffer = []
+    clearTimeout(saveTimer)
+    clearTimeout(saveFrpcTimer)
+    return failures.length ? { success: false, message: '部分数据未清除，请重试：' + failures.join('；'), failures } : { success: true }
   },
 
   // ==================== 工具 ====================
@@ -1137,258 +723,7 @@ window.services = {
     return dirs ? dirs[0] : null
   },
 
-  startFileServer (dirPath, port = 3000, mode) {
-    if (fileServer) return Promise.resolve({ success: false, message: '文件服务器已在运行中' })
-    if (!fs.existsSync(dirPath)) return Promise.resolve({ success: false, message: '目录不存在' })
-    const rootDir = path.resolve(dirPath)
-    let rootRealPath
-    try {
-      rootRealPath = fs.realpathSync.native(rootDir)
-      if (!fs.statSync(rootRealPath).isDirectory()) {
-        return Promise.resolve({ success: false, message: '请选择有效目录' })
-      }
-    } catch (e) {
-      return Promise.resolve({ success: false, message: '目录不可访问: ' + e.message })
-    }
-
-    const MIME_TYPES = {
-      '.html': 'text/html; charset=utf-8',
-      '.htm': 'text/html; charset=utf-8',
-      '.css': 'text/css; charset=utf-8',
-      '.js': 'application/javascript; charset=utf-8',
-      '.mjs': 'application/javascript; charset=utf-8',
-      '.json': 'application/json; charset=utf-8',
-      '.xml': 'application/xml; charset=utf-8',
-      '.txt': 'text/plain; charset=utf-8',
-      '.md': 'text/plain; charset=utf-8',
-      '.csv': 'text/plain; charset=utf-8',
-      '.png': 'image/png',
-      '.jpg': 'image/jpeg',
-      '.jpeg': 'image/jpeg',
-      '.gif': 'image/gif',
-      '.svg': 'image/svg+xml',
-      '.ico': 'image/x-icon',
-      '.webp': 'image/webp',
-      '.mp3': 'audio/mpeg',
-      '.mp4': 'video/mp4',
-      '.webm': 'video/webm',
-      '.woff': 'font/woff',
-      '.woff2': 'font/woff2',
-      '.ttf': 'font/ttf',
-      '.otf': 'font/otf',
-      '.pdf': 'application/pdf',
-      '.zip': 'application/zip',
-      '.gz': 'application/gzip',
-      '.tar': 'application/x-tar',
-      '.wasm': 'application/wasm'
-    }
-
-    function getMimeType (filePath) {
-      const ext = path.extname(filePath).toLowerCase()
-      return MIME_TYPES[ext] || 'application/octet-stream'
-    }
-
-    function getFileSize (size) {
-      if (size < 1024) return size + ' B'
-      if (size < 1024 * 1024) return (size / 1024).toFixed(1) + ' KB'
-      if (size < 1024 * 1024 * 1024) return (size / (1024 * 1024)).toFixed(1) + ' MB'
-      return (size / (1024 * 1024 * 1024)).toFixed(1) + ' GB'
-    }
-
-    function renderDirPage (dirUrl, entries, parentPath) {
-      const items = entries.map(e => {
-        const icon = e.isDirectory
-          ? '<svg width="16" height="16" viewBox="0 0 16 16" fill="#6C8EBF"><path d="M1.5 2h4.3l1.2 2H14.5a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/></svg>'
-          : '<svg width="16" height="16" viewBox="0 0 16 16" fill="#999"><path d="M4 1h5.5L12 3.5V14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1zm1 4h5v1H5V5zm0 3h5v1H5V8zm0 3h3v1H5v-1z"/></svg>'
-        const name = e.name + (e.isDirectory ? '/' : '')
-        const href = dirUrl + encodeURIComponent(e.name) + (e.isDirectory ? '/' : '')
-        const size = e.isDirectory ? '-' : getFileSize(e.size)
-        const mtime = e.mtime ? new Date(e.mtime).toLocaleString('zh-CN') : '-'
-        return `<tr><td>${icon}</td><td><a href="${escapeHtml(href)}">${escapeHtml(name)}</a></td><td>${escapeHtml(size)}</td><td>${escapeHtml(mtime)}</td></tr>`
-      }).join('\n')
-
-      const parentIcon = '<svg width="16" height="16" viewBox="0 0 16 16" fill="#6C8EBF"><path d="M1.5 2h4.3l1.2 2H14.5a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/></svg>'
-      const parentRow = parentPath
-        ? `<tr><td>${parentIcon}</td><td><a href="${escapeHtml(parentPath)}">..</a></td><td>-</td><td>-</td></tr>`
-        : ''
-
-      return `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>📂 ${escapeHtml(dirUrl)}</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f8f9fa; color: #1a1a1a; padding: 24px; }
-  .header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid #e8ecf0; }
-  .header h1 { font-size: 18px; font-weight: 600; color: #1a1a1a; }
-  .header .path { font-size: 13px; color: #8a8a8a; font-family: 'Cascadia Code', 'Fira Code', monospace; }
-  table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
-  th { background: #f1f3f5; text-align: left; padding: 10px 16px; font-size: 12px; font-weight: 600; color: #8a8a8a; text-transform: uppercase; letter-spacing: 0.5px; }
-  td { padding: 10px 16px; border-top: 1px solid #f1f3f5; font-size: 13px; }
-  td:first-child { width: 32px; text-align: center; }
-  td:nth-child(3), td:nth-child(4) { color: #8a8a8a; font-size: 12px; }
-  a { color: #10B981; text-decoration: none; font-weight: 500; }
-  a:hover { text-decoration: underline; }
-  tr:hover { background: #f8f9fa; }
-  .footer { margin-top: 16px; text-align: center; font-size: 11px; color: #b0b0b0; }
-</style>
-</head>
-<body>
-  <div class="header">
-    <h1>📂 目录浏览</h1>
-    <span class="path">${escapeHtml(dirUrl)}</span>
-  </div>
-  <table>
-    <thead><tr><th></th><th>名称</th><th>大小</th><th>修改时间</th></tr></thead>
-    <tbody>
-      ${parentRow}
-      ${items}
-    </tbody>
-  </table>
-  <div class="footer">由 devtunnel 内网穿透插件提供</div>
-</body>
-</html>`
-    }
-
-    function getParentUrlPath (dirUrl) {
-      const trimmed = String(dirUrl || '/').replace(/\/+$/, '')
-      if (!trimmed) return null
-      const index = trimmed.lastIndexOf('/')
-      return index <= 0 ? '/' : trimmed.slice(0, index + 1)
-    }
-
-    return new Promise((resolve) => {
-      try {
-        fileServer = http.createServer((req, res) => {
-          try {
-            const requestUrl = new URL(req.url || '/', 'http://127.0.0.1')
-            let reqPath
-            try {
-              reqPath = decodeURIComponent(requestUrl.pathname || '/')
-            } catch (e) {
-              res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' })
-              res.end('400 请求路径无效')
-              return
-            }
-            const normalizedReqPath = reqPath.replace(/^[/\\]+/, '')
-
-            // 安全检查：防止目录遍历
-            const fullPath = path.resolve(path.join(rootDir, normalizedReqPath))
-            if (!isPathInside(rootDir, fullPath)) {
-              res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' })
-              res.end('403 禁止访问')
-              return
-            }
-
-            if (!fs.existsSync(fullPath)) {
-              res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
-              res.end('404 文件不存在')
-              return
-            }
-
-            const realPath = fs.realpathSync.native(fullPath)
-            if (!isPathInside(rootRealPath, realPath)) {
-              res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' })
-              res.end('403 禁止访问')
-              return
-            }
-
-            const stat = fs.statSync(realPath)
-
-            if (stat.isDirectory()) {
-              let entries = fs.readdirSync(realPath, { withFileTypes: true })
-              entries.sort((a, b) => {
-                if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1
-                return a.name.localeCompare(b.name)
-              })
-              entries = entries.map(e => {
-                try {
-                  const entryPath = path.join(realPath, e.name)
-                  const entryRealPath = fs.realpathSync.native(entryPath)
-                  if (!isPathInside(rootRealPath, entryRealPath)) return null
-                  const s = fs.statSync(entryRealPath)
-                  return { name: e.name, isDirectory: s.isDirectory(), size: s.size, mtime: s.mtimeMs }
-                } catch (err) {
-                  return { name: e.name, isDirectory: false, size: 0, mtime: 0 }
-                }
-              }).filter(Boolean)
-
-              const dirUrl = requestUrl.pathname.endsWith('/') ? requestUrl.pathname : requestUrl.pathname + '/'
-              const parentPath = dirUrl !== '/' ? getParentUrlPath(dirUrl) : null
-              const html = renderDirPage(dirUrl, entries, parentPath)
-              res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-              res.end(html)
-            } else {
-              const mime = getMimeType(realPath)
-              res.writeHead(200, {
-                'Content-Type': mime,
-                'Content-Length': stat.size,
-                'Content-Disposition': 'inline'
-              })
-              fs.createReadStream(realPath).pipe(res)
-            }
-          } catch (err) {
-            if (mode === 'frp') addFrpcLog('error', '文件服务器请求失败: ' + err.message, 'proxydir')
-            else addLog('error', '文件服务器请求失败: ' + err.message)
-            res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' })
-            res.end('500 服务器错误')
-          }
-        })
-
-        const server = fileServer
-        fileServerMode = mode || 'devtunnel'
-        server.on('error', (err) => {
-          if (mode === 'frp') addFrpcLog('error', '文件服务器错误: ' + err.message, 'proxydir')
-          else addLog('error', '文件服务器错误: ' + err.message)
-          if (fileServer === server) {
-            fileServer = null
-            fileServerPort = null
-            fileServerDir = null
-            fileServerMode = null
-          }
-          resolve({ success: false, message: '端口 ' + port + ' 启动失败: ' + err.message })
-        })
-
-        server.listen(port, '127.0.0.1', () => {
-          if (fileServer !== server) { resolve({ success: false, message: '文件服务启动已取消' }); return }
-          fileServerPort = server.address().port
-          fileServerDir = rootDir
-          fileServerMode = mode || 'devtunnel'
-          if (mode === 'frp') addFrpcLog('system', '文件服务器已启动: http://127.0.0.1:' + port + ' -> ' + rootDir, 'proxydir')
-          else addLog('system', '文件服务器已启动: http://127.0.0.1:' + port + ' -> ' + rootDir)
-          window.dispatchEvent(new CustomEvent('fileserver-started', { detail: { port: fileServerPort, dir: rootDir, mode: fileServerMode } }))
-          resolve({ success: true, port: fileServerPort })
-        })
-      } catch (e) {
-        fileServer = null
-        resolve({ success: false, message: e.message })
-      }
-    })
-  },
-
-  stopFileServer (mode) {
-    if (!fileServer) return { success: false, message: '文件服务器未在运行' }
-    if (mode && fileServerMode && mode !== fileServerMode) return { success: false, message: '文件服务器属于 ' + fileServerMode + ' 模式，拒绝停止' }
-    try {
-      fileServer.close()
-      fileServer.closeAllConnections?.()
-      if (mode === 'frp') addFrpcLog('system', '文件服务器已停止', 'proxydir')
-      else addLog('system', '文件服务器已停止')
-      fileServer = null
-      fileServerPort = null
-      fileServerDir = null
-      fileServerMode = null
-      return { success: true }
-    } catch (e) {
-      return { success: false, message: e.message }
-    }
-  },
-
-  getFileServerStatus () {
-    return { running: fileServer !== null, port: fileServerPort, dir: fileServerDir, mode: fileServerMode }
-  },
+  ...fileController,
 
   // ==================== Frp 管理 ====================
 
@@ -1402,7 +737,7 @@ window.services = {
         proxies: doc.proxies || []
       }
     } catch (e) {
-      return null
+      throw new Error('读取 FRP 配置失败: ' + e.message)
     }
   },
 
@@ -1417,15 +752,14 @@ window.services = {
       }
       const existing = window.utools.db.get('frp-config') || {}
       if (Object.prototype.hasOwnProperty.call(config, 'expectedRevision') && config.expectedRevision !== (existing._rev || null)) throw new Error('FRP 配置已被同步更新，请重新进入页面后再保存')
-      const server = { ...existing.server, ...config.server }
-      if (config.proxies !== undefined) {
-        const error = validateProxies(config.proxies, server)
-        if (error) throw new Error(error)
-      }
+      const server = { serverAddr: '', serverPort: '7000', ...existing.server, ...config.server }
+      const proxies = config.proxies !== undefined ? config.proxies : (existing.proxies || [])
+      const error = validateServer(server, false) || validateProxies(proxies, server)
+      if (error) throw new Error(error)
       const hasToken = Object.prototype.hasOwnProperty.call(config.server || {}, 'token')
       const token = config.server?.token
       delete server.token
-      const doc = { ...existing, _id: 'frp-config', server, proxies: config.proxies !== undefined ? config.proxies : (existing.proxies || []) }
+      const doc = { ...existing, _id: 'frp-config', server, proxies }
       const result = window.utools.db.put(doc)
       if (!result?.ok) throw new Error(result?.message || '保存 FRP 配置失败')
       if (hasToken) {

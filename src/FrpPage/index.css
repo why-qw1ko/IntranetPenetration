@@ -288,3 +288,5 @@
   margin-bottom: 10px;
   overflow-wrap: anywhere;
 }
+
+.frp-form-box { max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); }
