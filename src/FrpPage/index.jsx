@@ -213,14 +213,25 @@ export default function FrpPage ({ onToggleSidebar, onOpenSettings, showToast })
 
   const handleStartSelected = useCallback(async () => {
     if (operationRef.current) return
-    if (!config.serverAddr) { showToast('请先配置服务器', 'error'); return }
     if (selectedProxies.length === 0) { showToast('请先勾选要启动的代理', 'error'); return }
     operationRef.current = true
     setOperating(true)
     window.services?.clearFrpcLogs?.()
     window.services?.addFrpcLog?.('system', '正在启动 frpc...', 'frp')
     try {
-      const result = await window.services?.startFrpc?.(config, selectedProxies, 'frp')
+      const latest = await window.services.getFrpConfig()
+      if (!latest?.server?.serverAddr) throw new Error('请先配置服务器')
+      setConfig(latest.server)
+      setProxies(latest.proxies)
+      const revision = latest.revision || null
+      if (revision !== savedRevisionRef.current) {
+        savedRevisionRef.current = revision
+        setSelectedNames(prev => prev.filter(name => latest.proxies.some(proxy => proxy.name.trim() === name)))
+        throw new Error('FRP 配置已被同步更新，请确认当前规则后重新启动')
+      }
+      const selected = latest.proxies.filter(proxy => selectedNames.includes(proxy.name.trim()))
+      if (!selected.length) throw new Error('请先勾选要启动的代理')
+      const result = await window.services.startFrpc(latest.server, selected, 'frp')
       if (result?.success) {
         setFrpcStatus(window.services.getFrpcStatus())
         window.services?.addFrpcLog?.('system', 'frpc 进程已启动 (pid: ' + result.pid + ')', 'frp')
@@ -235,7 +246,7 @@ export default function FrpPage ({ onToggleSidebar, onOpenSettings, showToast })
       operationRef.current = false
       setOperating(false)
     }
-  }, [config, selectedProxies, showToast])
+  }, [selectedNames, selectedProxies, showToast])
 
   const handleStopAll = useCallback(async () => {
     if (operationRef.current) return
@@ -478,13 +489,13 @@ export default function FrpPage ({ onToggleSidebar, onOpenSettings, showToast })
             <div className='frp-form-title'>{editingIdx >= 0 ? '编辑代理' : '新建代理'}</div>
 
             <div className='form-group'>
-              <label className='form-label'>代理名称 *</label>
-              <input className='form-input' type='text' value={form.name} disabled={locked} onChange={(e) => setForm(prev => ({ ...prev, name: e.target.value }))} placeholder='如 web、ssh、api' />
+              <label className='form-label' htmlFor='frppage-field-1'>代理名称 *</label>
+              <input id='frppage-field-1' className='form-input' type='text' value={form.name} disabled={locked} onChange={(e) => setForm(prev => ({ ...prev, name: e.target.value }))} placeholder='如 web、ssh、api' />
             </div>
 
             <div className='form-group'>
-              <label className='form-label'>代理类型 *</label>
-              <select className='form-select' value={form.type} disabled={locked} onChange={(e) => setForm(prev => ({ ...prev, type: e.target.value }))}>
+              <label className='form-label' htmlFor='frppage-field-2'>代理类型 *</label>
+              <select id='frppage-field-2' className='form-select' value={form.type} disabled={locked} onChange={(e) => setForm(prev => ({ ...prev, type: e.target.value }))}>
                 {PROXY_TYPES.map(t => (
                   <option key={t.value} value={t.value}>{t.label} — {t.desc}</option>
                 ))}
@@ -492,22 +503,22 @@ export default function FrpPage ({ onToggleSidebar, onOpenSettings, showToast })
             </div>
 
             <div className='form-group'>
-              <label className='form-label'>本地端口 *</label>
-              <input className='form-input' type='number' value={form.localPort} disabled={locked} onChange={(e) => setForm(prev => ({ ...prev, localPort: e.target.value }))} placeholder='3000' min='1' max='65535' />
+              <label className='form-label' htmlFor='frppage-field-3'>本地端口 *</label>
+              <input id='frppage-field-3' className='form-input' type='number' value={form.localPort} disabled={locked} onChange={(e) => setForm(prev => ({ ...prev, localPort: e.target.value }))} placeholder='3000' min='1' max='65535' />
             </div>
 
             {form.type === 'tcp' && (
               <div className='form-group'>
-                <label className='form-label'>远程端口 *</label>
-                <input className='form-input' type='number' value={form.remotePort} disabled={locked} onChange={(e) => setForm(prev => ({ ...prev, remotePort: e.target.value }))} placeholder='6000' min='1' max='65535' />
+                <label className='form-label' htmlFor='frppage-field-4'>远程端口 *</label>
+                <input id='frppage-field-4' className='form-input' type='number' value={form.remotePort} disabled={locked} onChange={(e) => setForm(prev => ({ ...prev, remotePort: e.target.value }))} placeholder='6000' min='1' max='65535' />
                 <div className='form-hint'>通过 服务器IP:远程端口 访问</div>
               </div>
             )}
 
             {form.type === 'http' && (
               <div className='form-group'>
-                <label className='form-label'>自定义域名 *</label>
-                <input className='form-input' type='text' value={form.customDomain} disabled={locked} onChange={(e) => setForm(prev => ({ ...prev, customDomain: e.target.value }))} placeholder='web.your-server.com' />
+                <label className='form-label' htmlFor='frppage-field-5'>自定义域名 *</label>
+                <input id='frppage-field-5' className='form-input' type='text' value={form.customDomain} disabled={locked} onChange={(e) => setForm(prev => ({ ...prev, customDomain: e.target.value }))} placeholder='web.your-server.com' />
                 <div className='form-hint'>需要在 frps 配置泛域名解析</div>
               </div>
             )}

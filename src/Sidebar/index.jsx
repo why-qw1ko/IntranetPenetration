@@ -40,7 +40,7 @@ export default function Sidebar ({ activeSection, onSelect, collapsed, onToggle 
         </div>
 
         <div className='sidebar-footer'>
-          <span className='sidebar-version'>v2.0.0</span>
+          <span className='sidebar-version'>v{__APP_VERSION__}</span>
         </div>
       </div>
 
@@ -54,3 +54,4 @@ export default function Sidebar ({ activeSection, onSelect, collapsed, onToggle 
     </>
   )
 }
+/* global __APP_VERSION__ */

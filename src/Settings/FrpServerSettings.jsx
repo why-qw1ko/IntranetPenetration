@@ -86,7 +86,7 @@ export default function FrpServerSettings ({ showToast }) {
   return (
     <div className='card'>
       <div className='card-header'><span className='card-title'><Server size={15} /> FRP 服务器</span></div>
-      <div className='form-hint'>内网穿透和代理目录共用此配置。地址、端口随 uTools 配置同步；Token 沿用独立存储，不写入服务器同步文档。</div>
+      <div className='form-hint'>内网穿透和代理目录共用此配置。Token 按设备 ID 隔离取值，仍遵循 uTools 的数据同步机制。</div>
       {[
         ['serverAddr', '服务器地址', 'text', '服务器 IP 或域名'],
         ['serverPort', '服务器端口', 'number', '7000'],

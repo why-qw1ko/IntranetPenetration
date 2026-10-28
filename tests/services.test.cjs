@@ -26,7 +26,7 @@ function setup (command = () => '', options = {}) {
           if (result?.ok) docs.set(doc._id, structuredClone(doc))
           return result
         },
-        remove: doc => docs.delete(doc._id)
+        remove: doc => { docs.delete(doc._id); return { ok: true } }
       },
       dbStorage: {
         getItem: key => local.get(key),
@@ -477,4 +477,63 @@ test('停止超时会结束等待并移除监听，调用方可以重试', async
   assert.match(result.message, /超时/)
   assert.equal(child.listenerCount('close'), 0)
   assert.equal(child.listenerCount('error'), 0)
+})
+
+test('列表和端口查询失败不会被解释成空列表或触发隧道创建', async () => {
+  const failed = setup(args => { if (args[0] === 'list') throw new Error('offline'); return '' })
+  await assert.rejects(failed.services.listTunnels(), /offline/)
+  await assert.rejects(failed.services.createTunnel({ port: 3000 }), /offline/)
+  assert.equal(failed.calls.some(args => args[0] === 'create'), false)
+  const ports = setup(args => {
+    if (args[0] === 'show') return JSON.stringify(tunnel)
+    if (args[0] === 'port') throw new Error('ports unavailable')
+    return ''
+  })
+  await assert.rejects(ports.services.listPorts(tunnel.tunnelId), /ports unavailable/)
+  assert.equal(await ports.services.getTunnelWithPorts(tunnel.tunnelId), null)
+})
+
+test('成功读取的空端口列表不会回退到 show 中的旧端口', async () => {
+  const env = setup(args => args[0] === 'show' ? JSON.stringify(tunnel) : '[]')
+  assert.equal((await env.services.getTunnelWithPorts(tunnel.tunnelId)).ports.length, 0)
+})
+
+test('创建文本输出必须保留完整 ID，并向相同 ID 添加端口', async () => {
+  for (const id of ['abcdef', 'abc123', 'sample-tunnel', 'my-tunnel.use']) {
+    const env = setup(args => {
+      if (args[0] === 'list' || (args[0] === 'port' && args[1] === 'list')) return '[]'
+      if (args[0] === 'create') return 'Created tunnel ' + id
+      if (args[0] === 'show') return 'Tunnel ID: ' + args[1]
+      return ''
+    })
+    assert.equal((await env.services.createTunnel({ port: 3000 })).tunnelId, id)
+    assert.equal(env.calls.find(args => args[0] === 'port' && args[1] === 'create')[2], id)
+  }
+})
+
+test('FRP 读取失败与没有配置可区分，修改服务器时校验完整代理配置', async () => {
+  assert.equal(await setup().services.getFrpConfig(), null)
+  await assert.rejects(setup(undefined, { getError: true }).services.getFrpConfig(), /读取/)
+  const env = setup()
+  const original = { _id: 'frp-config', server: { serverAddr: 'example.com', serverPort: 7000 }, proxies: [{ name: 'web', type: 'tcp', localPort: 3000, remotePort: 6000 }] }
+  env.docs.set('frp-config', structuredClone(original))
+  const result = await env.services.saveFrpConfig({ server: { serverPort: 6000 } })
+  assert.equal(result.success, false)
+  assert.match(result.message, /冲突/)
+  assert.deepEqual(env.docs.get('frp-config'), original)
+})
+
+test('清除数据报告失败项、允许重试，并在成功后清空本机和同步配置', () => {
+  const env = setup()
+  env.local.set('test-device/frp-token', 'private')
+  env.docs.set('frp-config', { _id: 'frp-config' })
+  env.window.utools.db.remove = () => ({ error: true, message: 'conflict' })
+  const failed = env.services.clearAllData()
+  assert.equal(failed.success, false)
+  assert.match(failed.message, /frp-config.*conflict/)
+  assert.equal(env.docs.has('frp-config'), true)
+  env.window.utools.db.remove = doc => { env.docs.delete(doc._id); return { ok: true } }
+  assert.equal(env.services.clearAllData().success, true)
+  assert.equal(env.docs.size, 0)
+  assert.equal(env.local.size, 0)
 })

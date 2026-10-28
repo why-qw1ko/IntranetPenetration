@@ -20,3 +20,5 @@
   min-width: 90px;
   padding: 8px 20px;
 }
+
+.confirm-actions { flex-wrap: wrap; }

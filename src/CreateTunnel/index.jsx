@@ -77,14 +77,14 @@ export default function CreateTunnel ({ onBack, onCreated, showToast }) {
             </div>
 
             <div className='form-group'>
-              <label className='form-label'>端口号 *</label>
-              <input className='form-input' type='number' value={port} onChange={(e) => setPort(e.target.value)} placeholder='80、3000、8080...' min='1' max='65535' />
+              <label className='form-label' htmlFor='createtunnel-field-1'>端口号 *</label>
+              <input id='createtunnel-field-1' className='form-input' type='number' value={port} onChange={(e) => setPort(e.target.value)} placeholder='80、3000、8080...' min='1' max='65535' />
               <div className='form-hint'>要穿透的本地服务端口</div>
             </div>
 
             <div className='form-group'>
-              <label className='form-label'>协议</label>
-              <select className='form-select' value={protocol} onChange={(e) => setProtocol(e.target.value)}>
+              <label className='form-label' htmlFor='createtunnel-field-2'>协议</label>
+              <select id='createtunnel-field-2' className='form-select' value={protocol} onChange={(e) => setProtocol(e.target.value)}>
                 <option value='auto'>自动 (auto)</option>
                 <option value='http'>HTTP</option>
                 <option value='https'>HTTPS</option>
@@ -104,18 +104,18 @@ export default function CreateTunnel ({ onBack, onCreated, showToast }) {
             </div>
 
             <div className='form-group'>
-              <label className='form-label'>隧道 ID</label>
-              <input className='form-input' type='text' value={tunnelId} onChange={(e) => setTunnelId(e.target.value)} placeholder='留空自动生成' />
+              <label className='form-label' htmlFor='createtunnel-field-3'>隧道 ID</label>
+              <input id='createtunnel-field-3' className='form-input' type='text' value={tunnelId} onChange={(e) => setTunnelId(e.target.value)} placeholder='留空自动生成' />
             </div>
 
             <div className='form-group'>
-              <label className='form-label'>描述</label>
-              <input className='form-input' type='text' value={description} onChange={(e) => setDescription(e.target.value)} placeholder='用途说明' />
+              <label className='form-label' htmlFor='createtunnel-field-4'>描述</label>
+              <input id='createtunnel-field-4' className='form-input' type='text' value={description} onChange={(e) => setDescription(e.target.value)} placeholder='用途说明' />
             </div>
 
             <div className='form-group' style={{ marginBottom: 0 }}>
-              <label className='form-label'>过期时间</label>
-              <input className='form-input' type='text' value={expiration} onChange={(e) => setExpiration(e.target.value)} placeholder='24h、7d' />
+              <label className='form-label' htmlFor='createtunnel-field-5'>过期时间</label>
+              <input id='createtunnel-field-5' className='form-input' type='text' value={expiration} onChange={(e) => setExpiration(e.target.value)} placeholder='24h、7d' />
               <div className='form-hint'>h=小时，d=天，留空使用默认值</div>
             </div>
           </div>

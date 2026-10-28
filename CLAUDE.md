@@ -15,7 +15,10 @@ Additional features: directory proxying (expose a local folder as an HTTP file s
 
 - **Dev server**: `npm run dev` (Vite)
 - **Build**: `npm run build` → output in `dist/`
-- **No test suite or linter configured** (standard is listed as a devDep but no script)
+- **Tests**: `npm test` (Node test runner; HTTP integration and renderer event regressions)
+- **Lint**: `npm run lint` (Standard; production JS/JSX and build scripts)
+- **All local checks**: `npm run check` (lint, tests, build)
+- **Reproducible install**: `npm ci --ignore-scripts`; CI checks Windows and Linux on Node 22
 
 ## Architecture
 
@@ -26,6 +29,12 @@ public/
   preload/
     package.json       # { "type": "commonjs" } — preload runs in Node context
     services.js        # Backend: wraps devtunnel & frpc CLI, exposes window.services
+    devtunnel.js       # DevTunnel process lifecycle and URL ownership
+    devtunnel-parser.js # CLI text/JSON parsing, with compatibility samples in tests
+    file-server.js     # Async read-only HTTP server, bounded metadata reads, stream cleanup
+    frpc.js            # FRP process lifecycle and per-proxy registration status
+    frp.js             # Shared validation and TOML generation
+    storage.js         # Device-key isolation and legacy migration helpers
 src/
   main.jsx             # React entry
   App.jsx              # Root component with section/view routing (state, not router)
@@ -43,19 +52,20 @@ src/
 
 ### Two-process model
 
-- **Preload** (`public/preload/services.js`): runs in uTools' Node.js context. All `devtunnel` and `frpc` CLI calls go through `child_process.exec`/`spawn`. Exposes `window.services` to the renderer. Uses `window.utools.db` for persistent config and log storage. Communication back to the renderer is via `window.dispatchEvent(new CustomEvent(...))`. Uses `iconv-lite` for Windows GBK encoding support.
+- **Preload** (`public/preload/services.js`): runs in uTools' Node.js context. CLI calls use `child_process.execFile`/`spawn` with argument arrays. Exposes `window.services` to the renderer and delegates process control, parsing and HTTP serving to focused CommonJS modules. Communication uses `CustomEvent`s. UTF-8 output decoding falls back to the built-in GBK `TextDecoder` where available.
 
 - **Renderer** (`src/`): React 19 SPA. No react-router — navigation is a `section` + `view` string state in `App.jsx`. Sections: `devtunnel`, `frp`, `proxydir`, `tutorial`, `about`. Views within devtunnel: `dashboard`, `create`, `detail`, `settings`. All components call `window.services.*` for backend operations and listen to `CustomEvent`s for real-time log/status updates. Icons from `lucide-react`.
 
 ### Key patterns
 
 - **Tunnel URLs** are extracted from devtunnel stdout via regex (`/https:\/\/\S+\.devtunnels\.ms/g`) and cached in `window.services.tunnelUrlCache`.
-- **Host process lifecycle**: only one tunnel can run at a time (`hostProcess` singleton in services.js). Stopped via `taskkill /pid /T /F` on Windows.
-- **Log buffer**: in-memory array (max 500 entries) persisted to uTools DB (max 200) with debounced writes.
-- **Config caching**: `getConfig()` caches the DB doc in `configCache`; cleared on `saveConfig`.
+- **Host process lifecycle**: `devtunnel.js` owns one host process. Windows stop uses `taskkill /pid /T /F` and waits for close. File-service cleanup is tied to the captured service instance.
+- **Log buffer**: backend and renderer keep the latest 500 entries; the latest 200 persist with debounced writes to device-keyed dbStorage.
+- **Configuration**: shared defaults and FRP server/proxies are reread from uTools DB. Paths, directory settings and Token use device-prefixed dbStorage keys. This isolates reads across devices but does not prevent uTools data synchronization or encrypt credentials.
 - **Login flow**: device code OAuth — devtunnel outputs a URL + code, the preload auto-opens the browser and dispatches `tunnel-login-code` / `tunnel-login-done` events.
 - **Frp**: generates TOML config at runtime, writes to temp file, spawns `frpc` with `-c` flag. TCP connectivity testing available.
-- **File server**: built-in Node.js HTTP server for directory proxying with MIME type detection, directory listing, and path traversal protection.
+- **File server**: binds to loopback; async filesystem operations check lexical and real-path boundaries, including external symlinks. Directory metadata reads have a concurrency limit of 8. Stream pipelines handle read errors and client cancellation.
+- **Failures and startup**: list/port/FRP configuration reads distinguish failure from empty results. Directory startup validates before stopping an existing host; cancelling a reuse prompt preserves the host. Only resources owned by the current attempt are cleaned on failure.
 
 ### CSS
 
@@ -69,7 +79,9 @@ All styles are plain CSS (no preprocessor, no CSS modules). Each component has a
 
 ## Important Details
 
-- The default `devtunnel.exe` path is hardcoded in services.js to `C:\Users\不冷\devtunnel\devtunnel.exe`. Users change this in Settings; the value is stored in uTools DB as `devtunnel-config`.
-- The `frpc` path is also configurable via Settings, stored alongside devtunnel config in uTools DB.
+- The default executable path is `path.join(os.homedir(), 'devtunnel', 'devtunnel.exe')`. Settings can override it for the current device.
+- The `frpc` path is configurable per device; detection also checks the devtunnel executable's directory.
 - The preload uses CommonJS (`require`), not ESM — the `public/preload/package.json` sets `"type": "commonjs"`.
 - `window.__runningTunnelId` is a global variable used to persist the running tunnel ID across re-renders (since the host process lives in the preload, not React state).
+- Do not introduce new dependencies or reformat unrelated files for a local fix. Keep original CRLF source line endings; workflow YAML uses LF.
+- Renderer tests use a small hook host, not a browser DOM. They cannot replace real uTools focus, layout, login, cross-device sync or external CLI acceptance checks.

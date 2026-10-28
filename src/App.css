@@ -624,3 +624,5 @@ html, body {
 }
 
 .login-modal-cancel:hover { background: var(--bg-hover); }
+
+.modal-box, .login-modal { max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); overflow-y: auto; }

@@ -4,6 +4,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "lint": "node scripts/lint.mjs",
+    "check": "npm run lint && npm test && npm run build",
     "test": "node --test tests/*.test.cjs"
   },
   "dependencies": {

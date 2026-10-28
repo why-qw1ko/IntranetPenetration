@@ -24,9 +24,13 @@ export default function App () {
   const dataLoadedRef = useRef(false)
   const tunnelRequestRef = useRef(0)
 
+  const toastTimer = useRef(null)
+  useEffect(() => () => clearTimeout(toastTimer.current), [])
+
   const showToast = useCallback((msg, type = 'info') => {
+    clearTimeout(toastTimer.current)
     setToast({ msg, type })
-    setTimeout(() => setToast({ msg: '', type: 'info' }), 2200)
+    toastTimer.current = setTimeout(() => setToast({ msg: '', type: 'info' }), 2200)
   }, [])
 
   // 全局异常捕获
@@ -82,7 +86,7 @@ export default function App () {
       lastRefreshRef.current = now
       dataLoadedRef.current = true
     } catch (e) {
-      if (request === tunnelRequestRef.current) setTunnels([])
+      if (request === tunnelRequestRef.current) showToastRef.current('刷新隧道列表失败: ' + e.message, 'error')
     } finally {
       if (request === tunnelRequestRef.current) setLoading(false)
     }
