@@ -1,5 +1,5 @@
 /* global __APP_VERSION__ */
-import { AlertTriangle, Lock, Wrench, ClipboardList, RefreshCw, Menu, ShieldCheck } from 'lucide-react'
+import { AlertTriangle, Lock, Wrench, ClipboardList, Menu, ShieldCheck } from 'lucide-react'
 import './index.css'
 
 export default function AboutPage ({ onToggleSidebar }) {
@@ -7,7 +7,7 @@ export default function AboutPage ({ onToggleSidebar }) {
     <div className='content-wrap'>
       <div className='topbar'>
         <div className='topbar-left'>
-          <button className='topbar-menu-btn' onClick={onToggleSidebar}><Menu size={18} /></button>
+          <button className='topbar-menu-btn' onClick={onToggleSidebar} title='菜单'><Menu size={18} /></button>
           <span className='topbar-title'>关于本项目</span>
         </div>
       </div>
@@ -19,7 +19,7 @@ export default function AboutPage ({ onToggleSidebar }) {
               <div className='about-name'>内网穿透助手</div>
               <div className='about-version'>v{__APP_VERSION__}</div>
               <p className='about-desc'>
-                面向开发调试、远程演示和临时文件分享的 uTools 本地插件。它把 DevTunnel、Frp 和目录代理整理到一个轻量操作台里，让你少记命令，多关注正在暴露什么服务。
+                通过 Dev Tunnels 或 FRP 转发本地服务，也可以共享本地文件夹。
               </p>
             </div>
           </div>
@@ -28,9 +28,9 @@ export default function AboutPage ({ onToggleSidebar }) {
             <div className='about-card'>
               <div className='about-card-title'><Wrench size={16} /> 核心能力</div>
               <ul className='about-list'>
-                <li><b>暴露本地端口</b>：通过 DevTunnel 快速生成公网访问地址，适合 Webhook、API 和本地 Web 项目调试。</li>
-                <li><b>分享本地目录</b>：内置只读 HTTP 文件服务，可将选定文件夹临时暴露给外部访问。</li>
-                <li><b>Frp 内网穿透</b>：连接你的 frps 服务端，用一个 frpc 进程承载多条代理规则。</li>
+                <li>通过 DevTunnel 快速生成公网访问地址，适合 Webhook、API 和本地 Web 项目调试。</li>
+                <li>内置只读 HTTP 文件服务，可将选定文件夹临时暴露给外部访问。</li>
+                <li>连接你的 frps 服务端，用一个 frpc 进程承载多条代理规则。</li>
               </ul>
             </div>
 
@@ -60,15 +60,6 @@ export default function AboutPage ({ onToggleSidebar }) {
               <li>本插件负责管理本机 CLI、配置和本地文件服务；DevTunnel 服务由 Microsoft 提供，Frp 服务端由你自行部署或维护。</li>
               <li>Frp 的“测试端口”只验证服务器端口是否可连通，不代表 Token 已通过认证；认证结果以启动 frpc 后的日志为准。</li>
               <li>请勿将未加鉴权的管理后台、私密文件或敏感接口直接暴露到公网。</li>
-            </ul>
-          </div>
-
-          <div className='about-card'>
-            <div className='about-card-title'><RefreshCw size={16} /> 更新日志</div>
-            <ul className='about-list'>
-              <li><b>v2.0.0</b> — 重构工作台入口，修正 Frp 端口测试语义，优化卡片视觉和运行状态表达。</li>
-              <li>增强 preload 安全边界：命令执行避免 shell 拼接、目录代理补充路径校验、Frp 日志脱敏。</li>
-              <li><b>v1.0.0</b> — 初始版本，支持 DevTunnel、Frp、目录代理和教程文档。</li>
             </ul>
           </div>
 

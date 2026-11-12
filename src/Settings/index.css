@@ -1,12 +1,5 @@
-.settings-save-status {
-  margin-bottom: 8px;
-  font-size: 12px;
-  color: var(--text-sub);
-  overflow-wrap: anywhere;
-}
-
 .settings-sync-hint {
-  margin-bottom: 16px;
+  margin-top: 4px;
 }
 
 .settings-field-error {
@@ -33,33 +26,4 @@
   align-items: center;
   gap: 10px;
   margin-top: 10px;
-}
-
-.about-card {
-  text-align: center;
-  padding: 24px;
-  color: var(--text-sub);
-  margin-top: 12px;
-}
-
-.about-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-title);
-  margin-bottom: 4px;
-}
-
-.about-desc {
-  font-size: 12px;
-  margin-bottom: 10px;
-}
-
-.about-link {
-  font-size: 12px;
-  color: var(--brand);
-  text-decoration: none;
-}
-
-.about-link:hover {
-  text-decoration: underline;
 }

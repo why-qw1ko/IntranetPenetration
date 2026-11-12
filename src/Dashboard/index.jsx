@@ -1,9 +1,18 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { Radio, ClipboardCopy, Code2, Square, Menu, FolderOpen, Server, Activity, ArrowRight } from 'lucide-react'
+import { Radio, ClipboardCopy, Code2, Square, Menu, Activity } from 'lucide-react'
 import ConfirmModal from '../ConfirmModal'
 import './index.css'
 
-export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onRefreshLogin, onLogin, onCreateNew, onOpenProxyDir, onOpenFrp, onSelectTunnel, onToggleSidebar, showToast }) {
+const LOGIN_FAILURE_HINTS = {
+  notFound: '找不到 devtunnel 程序，请在设置中检查路径。',
+  permission: '无法执行 devtunnel，请检查程序权限。',
+  timeout: '登录状态检查超时，请检查网络后重试。',
+  unknownOutput: '无法识别登录状态，请检查 devtunnel 版本后重试。',
+  commandFailed: '登录状态检查失败，请检查程序和网络后重试。',
+  serviceUnavailable: '服务不可用，请重新打开插件后重试。'
+}
+
+export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onRefreshLogin, onLogin, onCreateNew, onSelectTunnel, onToggleSidebar, showToast }) {
   const [tab, setTab] = useState(() => {
     try { return window.services?.getTabMemory?.('dashboard-tab') || 'tunnels' } catch (e) { return 'tunnels' }
   })
@@ -191,16 +200,23 @@ export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onR
           <button className='topbar-menu-btn' onClick={onToggleSidebar} title='菜单'>
             <Menu size={18} />
           </button>
-          <span className='topbar-title'>工作台</span>
+          <span className='topbar-title'>Microsoft Dev Tunnels</span>
           {loading && <span className='spinner' />}
         </div>
         <div className='topbar-right'>
           <button className='btn btn-ghost btn-sm' onClick={handleRefreshLogin} disabled={refreshLoginLoading} title='刷新登录状态'>
             {refreshLoginLoading ? <><span className='spinner' /> 检查中...</> : '刷新登录'}
           </button>
-          <button className='btn btn-ghost btn-sm' onClick={onRefresh} disabled={loading}>刷新列表</button>
+          <button className='btn btn-ghost btn-sm' onClick={onRefresh} disabled={loading || loginInfo?.state !== 'loggedIn'}>刷新列表</button>
         </div>
       </div>
+
+      {runningTunnel && !tunnels.some(tunnel => tunnel.tunnelId === runningTunnel) && (
+        <div className='page-notice' role='status' style={{ margin: '16px 20px 0', alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ flex: 1 }}>隧道 {runningTunnel} 仍在运行，但未出现在当前列表中。</span>
+          <button className='btn btn-warning btn-sm' onClick={handleStop}>停止运行中的隧道</button>
+        </div>
+      )}
 
       {/* Tab 栏 */}
       <div className='tab-bar'>
@@ -215,64 +231,29 @@ export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onR
       {/* 隧道 Tab */}
       {tab === 'tunnels' && (
         <div className='page'>
-          <div className='workbench-panel'>
-            <div className='workbench-head'>
-              <div>
-                <div className='workbench-title'>选择你现在要做的事</div>
-                <div className='workbench-subtitle'>常用操作放在这里，底层通道可以以后再细调</div>
-              </div>
-              <div className='workbench-metrics'>
-                <div className='metric-item'>
-                  <span className='metric-value'>{tunnels.length}</span>
-                  <span className='metric-label'>隧道</span>
-                </div>
-                <div className='metric-item'>
-                  <span className={`metric-value ${runningTunnel ? 'running' : ''}`}>{runningTunnel ? '1' : '0'}</span>
-                  <span className='metric-label'>运行中</span>
-                </div>
-              </div>
+          <div className='workbench-metrics'>
+            <div className='metric-item'>
+              <span className='metric-value'>{tunnels.length}</span>
+              <span className='metric-label'>隧道</span>
             </div>
-
-            <div className='quick-actions'>
-              <button className='quick-action primary' onClick={onCreateNew} disabled={loading || tunnels.length >= 2}>
-                <span className='quick-icon'><Radio size={20} /></span>
-                <span className='quick-copy'>
-                  <span className='quick-title'>暴露本地端口</span>
-                  <span className='quick-desc'>适合调试 Web、API、Webhook 回调</span>
-                </span>
-                <ArrowRight size={16} />
-              </button>
-              <button className='quick-action' onClick={onOpenProxyDir}>
-                <span className='quick-icon'><FolderOpen size={20} /></span>
-                <span className='quick-copy'>
-                  <span className='quick-title'>分享本地目录</span>
-                  <span className='quick-desc'>选择文件夹后生成可访问地址</span>
-                </span>
-                <ArrowRight size={16} />
-              </button>
-              <button className='quick-action' onClick={onOpenFrp}>
-                <span className='quick-icon'><Server size={20} /></span>
-                <span className='quick-copy'>
-                  <span className='quick-title'>使用 Frp 内网穿透</span>
-                  <span className='quick-desc'>适合长期服务和固定服务器</span>
-                </span>
-                <ArrowRight size={16} />
-              </button>
+            <div className='metric-item'>
+              <span className={`metric-value ${runningTunnel ? 'running' : ''}`}>{runningTunnel ? '1' : '0'}</span>
+              <span className='metric-label'>运行中</span>
             </div>
           </div>
 
           <div className='account-strip'>
-            {loginInfo?.loggedIn
+            {loginInfo?.state === 'loggedIn'
               ? (
                 <div className='login-row'>
                   <div className='login-left'>
                     <span className='badge badge-success'>已登录</span>
-                    <span className='login-user'>{loginInfo.summary}</span>
+                    <span className='login-user'>CLI 已确认登录状态</span>
                   </div>
                   <button className='btn btn-ghost btn-sm' onClick={handleLogout}>登出</button>
                 </div>
                 )
-              : loginInfo === null
+              : loginInfo?.state === 'checking'
                 ? (
                   <div className='login-row'>
                     <span className='spinner' />
@@ -282,8 +263,8 @@ export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onR
                 : (
                   <div className='login-row'>
                     <div className='login-left'>
-                      <span className='badge badge-orange'>未登录</span>
-                      <span className='login-hint'>登录后可创建隧道</span>
+                      <span className='badge badge-orange'>{loginInfo?.state === 'loggedOut' ? '未登录' : '检查失败'}</span>
+                      <span className='login-hint'>{loginInfo?.state === 'loggedOut' ? '请登录后创建隧道。' : (LOGIN_FAILURE_HINTS[loginInfo?.reason] || LOGIN_FAILURE_HINTS.commandFailed)}</span>
                     </div>
                     <button className='btn btn-brand btn-sm' onClick={() => setShowLoginModal(true)}>登录</button>
                   </div>
@@ -295,8 +276,8 @@ export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onR
             <button
               className='btn btn-brand btn-sm'
               onClick={onCreateNew}
-              disabled={loading || tunnels.length >= 2}
-              title={tunnels.length >= 2 ? '免费隧道数量已达上限（最多 2 个）' : ''}
+              disabled={loading || loginInfo?.state !== 'loggedIn' || tunnels.length >= 2}
+              title={loginInfo?.state !== 'loggedIn' ? '请先确认登录状态' : tunnels.length >= 2 ? '免费隧道数量已达上限（最多 2 个）' : ''}
             >
               + 新建隧道
             </button>
@@ -313,9 +294,9 @@ export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onR
                 <div className='empty-icon'><Radio size={40} strokeWidth={1.2} /></div>
                 <div className='empty-text'>暂无隧道</div>
                 <div className='empty-hint'>
-                  {loginInfo?.loggedIn
+                  {loginInfo?.state === 'loggedIn'
                     ? '点击上方「新建隧道」，将本地服务暴露到公网'
-                    : '请先登录，然后创建隧道'}
+                    : loginInfo?.state === 'checking' ? '正在检查登录状态' : '请确认登录状态后创建隧道'}
                 </div>
               </div>
               )
@@ -330,7 +311,7 @@ export default function Dashboard ({ tunnels, loginInfo, loading, onRefresh, onR
                           {isRunning ? '运行中' : '就绪'}
                         </span>
                       </div>
-                      {tunnel.description && <div className='tunnel-desc'>{tunnel.description}</div>}
+                      {tunnel.description && <div className='tunnel-desc'>{tunnel.description.replace(/^代理目录: /, '共享文件夹: ')}</div>}
                       {getTunnelUrl(tunnel) && (
                         <div className='tunnel-url' onClick={(e) => handleCopyUrl(e, getTunnelUrl(tunnel))} title='点击复制'>
                           {getTunnelUrl(tunnel)} <ClipboardCopy size={13} />

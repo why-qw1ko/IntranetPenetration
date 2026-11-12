@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Menu } from 'lucide-react'
+import { CheckCircle2, CircleX, Info, Menu } from 'lucide-react'
 import ConfirmModal from '../ConfirmModal'
 import FrpServerSettings from './FrpServerSettings'
 import './index.css'
@@ -20,7 +20,7 @@ export default function Settings ({ onToggleSidebar, showToast }) {
   const [validatingFrpc, setValidatingFrpc] = useState(false)
 
   const [confirmProps, setConfirmProps] = useState(null)
-  const [saveStatus, setSaveStatus] = useState('输入框失焦时自动保存，选项修改后立即保存')
+  const [saveStatus, setSaveStatus] = useState('输入框失焦后保存，选择项修改后立即保存。')
   const [saveErrors, setSaveErrors] = useState({})
   const [resetKey, setResetKey] = useState(0)
   const savedConfig = useRef({})
@@ -106,7 +106,7 @@ export default function Settings ({ onToggleSidebar, showToast }) {
   const handleClearData = useCallback(() => {
     setConfirmProps({
       title: '清除所有数据',
-      message: '确定要清除所有已存储的配置和日志吗？包括 devtunnel 配置、frp 配置、代理目录设置和运行日志。此操作不可撤销。',
+      message: '确定要清除所有已存储的配置和日志吗？包括 devtunnel 配置、frp 配置、共享文件夹设置和运行日志。此操作不可撤销。',
       confirmText: '清除所有数据',
       danger: true,
       onConfirm: () => {
@@ -148,8 +148,13 @@ export default function Settings ({ onToggleSidebar, showToast }) {
       </div>
 
       <div className='page'>
-        <div className='settings-save-status' role='status'>{Object.values(saveErrors).some(Boolean) ? Object.values(saveErrors).filter(Boolean).join('；') : saveStatus}</div>
-        <div className='form-hint settings-sync-hint'>隧道默认值、FRP 服务器地址、端口和代理规则通过 uTools 同步；可执行文件路径、目录设置和 Token 按设备隔离，换电脑需分别配置。</div>
+        <div className={`page-notice${Object.values(saveErrors).some(Boolean) ? ' is-error' : ''}`}>
+          <Info size={16} aria-hidden='true' />
+          <div>
+            <div role='status'>{Object.values(saveErrors).some(Boolean) ? Object.values(saveErrors).filter(Boolean).join('；') : saveStatus}</div>
+            <div className='settings-sync-hint'>默认配置和 FRP 规则随 uTools 同步；程序路径、文件夹设置和 Token 按设备区分。</div>
+          </div>
+        </div>
         <div className='card'>
           <div className='card-header'>
             <span className='card-title'>devtunnel 可执行文件</span>
@@ -170,8 +175,8 @@ export default function Settings ({ onToggleSidebar, showToast }) {
             <button className='btn btn-ghost btn-sm' onClick={validatePath} disabled={validating}>
               {validating ? <><span className='spinner' /> 验证中</> : '验证路径'}
             </button>
-            {pathStatus?.valid && <span className='badge badge-success'>✓ {pathStatus.version}</span>}
-            {pathStatus && !pathStatus.valid && <span className='badge badge-red'>✗ {pathStatus.message}</span>}
+            {pathStatus?.valid && <span className='badge badge-success'><CheckCircle2 size={13} /> {pathStatus.version}</span>}
+            {pathStatus && !pathStatus.valid && <span className='badge badge-red'><CircleX size={13} /> {pathStatus.message}</span>}
           </div>
         </div>
 
@@ -196,8 +201,8 @@ export default function Settings ({ onToggleSidebar, showToast }) {
             <button className='btn btn-ghost btn-sm' onClick={validateFrpcPath} disabled={validatingFrpc}>
               {validatingFrpc ? <><span className='spinner' /> 验证中</> : '验证路径'}
             </button>
-            {frpcPathStatus?.valid && <span className='badge badge-success'>✓ {frpcPathStatus.version}</span>}
-            {frpcPathStatus && !frpcPathStatus.valid && <span className='badge badge-red'>✗ {frpcPathStatus.message}</span>}
+            {frpcPathStatus?.valid && <span className='badge badge-success'><CheckCircle2 size={13} /> {frpcPathStatus.version}</span>}
+            {frpcPathStatus && !frpcPathStatus.valid && <span className='badge badge-red'><CircleX size={13} /> {frpcPathStatus.message}</span>}
           </div>
         </div>
 

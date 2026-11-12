@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import Sidebar from './Sidebar'
+import Home from './Home'
 import Dashboard from './Dashboard'
 import CreateTunnel from './CreateTunnel'
 import TunnelDetail from './TunnelDetail'
@@ -11,18 +12,20 @@ import AboutPage from './AboutPage'
 import './App.css'
 
 export default function App () {
-  const [section, setSection] = useState('devtunnel')
+  const [section, setSection] = useState('home')
   const [view, setView] = useState('')
   const [selectedTunnel, setSelectedTunnel] = useState(null)
   const [tunnels, setTunnels] = useState([])
-  const [loginInfo, setLoginInfo] = useState(null)
+  const [loginInfo, setLoginInfo] = useState({ state: 'checking' })
   const [loading, setLoading] = useState(false)
   const [toast, setToast] = useState({ msg: '', type: 'info' })
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const lastRefreshRef = useRef(0)
-  const lastLoginRefreshRef = useRef(0)
   const dataLoadedRef = useRef(false)
   const tunnelRequestRef = useRef(0)
+  const loginRequestRef = useRef(0)
+  const sectionRef = useRef(section)
+  sectionRef.current = section
 
   const toastTimer = useRef(null)
   useEffect(() => () => clearTimeout(toastTimer.current), [])
@@ -57,18 +60,20 @@ export default function App () {
     }
   }, [])
 
-  const loadLoginStatus = useCallback(async (force = false) => {
-    const now = Date.now()
-    if (!force && lastLoginRefreshRef.current && now - lastLoginRefreshRef.current < 60000) return
-
+  const loadLoginStatus = useCallback(async () => {
+    const request = ++loginRequestRef.current
+    setLoginInfo({ state: 'checking' })
     try {
-      if (!window.services) return
+      if (!window.services) throw new Error('服务不可用')
       const status = await window.services.getLoginStatus()
+      if (request !== loginRequestRef.current) return null
       setLoginInfo(status)
-      lastLoginRefreshRef.current = now
+      return status
     } catch (e) {
-      console.error('[loadLoginStatus] 错误:', e)
-      setLoginInfo({ loggedIn: false, info: '', summary: '检查失败' })
+      if (request !== loginRequestRef.current) return null
+      const status = { state: 'checkFailed', reason: 'serviceUnavailable' }
+      setLoginInfo(status)
+      return status
     }
   }, [])
 
@@ -97,33 +102,44 @@ export default function App () {
   }, [loadTunnels])
 
   const refreshLogin = useCallback(async () => {
-    await loadLoginStatus(true)
-  }, [loadLoginStatus])
+    const status = await loadLoginStatus()
+    if (!status) return
+    if (status.state === 'loggedIn') {
+      await loadTunnels(true)
+    } else {
+      ++tunnelRequestRef.current
+      setLoading(false)
+      setTunnels([])
+      dataLoadedRef.current = false
+    }
+  }, [loadLoginStatus, loadTunnels])
 
   const handleLogin = useCallback(async () => {
+    setLoginInfo({ state: 'checking' })
     await new Promise(resolve => setTimeout(resolve, 1000))
-    await Promise.all([loadLoginStatus(true), loadTunnels(true)])
-  }, [loadLoginStatus, loadTunnels])
+    if (sectionRef.current === 'devtunnel') await refreshLogin()
+  }, [refreshLogin])
 
   // 首次进入标记
   const firstEnterRef = useRef(true)
 
   useEffect(() => {
     window.utools.onPluginEnter((action) => {
-      loadLoginStatus(true)
-      loadTunnels(true)
-      // 首次进入时设置默认 section，后续进入保持当前 section
+      // 首次进入显示主页；仅在 Dev Tunnels 页面恢复时检查其状态。
       if (firstEnterRef.current) {
         firstEnterRef.current = false
-        setSection('devtunnel')
-        setView('dashboard')
+        sectionRef.current = 'home'
+        setSection('home')
+        setView('')
+      } else if (sectionRef.current === 'devtunnel') {
+        refreshLogin()
       }
     })
     window.utools.onPluginOut(() => {
       // 隐藏前提交当前输入框，保留界面以便再次进入时恢复。
       document.activeElement?.blur?.()
     })
-  }, [loadLoginStatus, loadTunnels])
+  }, [refreshLogin])
 
   const goToDetail = useCallback((tunnel) => {
     setSelectedTunnel(tunnel)
@@ -145,20 +161,23 @@ export default function App () {
   }, [loadTunnels])
 
   const handleSectionSelect = useCallback((key) => {
+    sectionRef.current = key
     setSection(key)
     if (key === 'devtunnel') {
       setView('dashboard')
       setSelectedTunnel(null)
-      loadTunnels(true)
+      refreshLogin()
     } else {
+      ++loginRequestRef.current
+      ++tunnelRequestRef.current
+      setLoading(false)
       setView('')
     }
-  }, [loadTunnels])
+  }, [refreshLogin])
 
   const handleSettingsSelect = useCallback(() => {
-    setSection('settings')
-    setView('')
-  }, [])
+    handleSectionSelect('settings')
+  }, [handleSectionSelect])
 
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed(prev => !prev)
@@ -174,6 +193,7 @@ export default function App () {
       />
 
       <div className='main'>
+        {section === 'home' && <Home onSelect={handleSectionSelect} onToggleSidebar={toggleSidebar} />}
         {/* devtunnel section — 每个子视图有自己的 topbar */}
         {section === 'devtunnel' && view === 'dashboard' && (
           <Dashboard
@@ -184,8 +204,6 @@ export default function App () {
             onRefreshLogin={refreshLogin}
             onLogin={handleLogin}
             onCreateNew={() => setView('create')}
-            onOpenProxyDir={() => handleSectionSelect('proxydir')}
-            onOpenFrp={() => handleSectionSelect('frp')}
             onSelectTunnel={goToDetail}
             onToggleSidebar={toggleSidebar}
             showToast={showToast}

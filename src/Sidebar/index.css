@@ -65,7 +65,10 @@
 }
 
 .sidebar-menu {
+  display: flex;
   flex: 1;
+  flex-direction: column;
+  gap: 4px;
   padding: 8px;
   overflow-y: auto;
 }
@@ -80,10 +83,11 @@
   transition: all 0.15s;
   font-size: 13px;
   color: var(--text);
-  white-space: nowrap;
+  overflow-wrap: anywhere;
   border: none;
   background: none;
   width: 100%;
+  flex-shrink: 0;
   text-align: left;
 }
 

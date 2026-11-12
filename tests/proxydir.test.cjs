@@ -21,6 +21,15 @@ test('目录设置通过失焦和选项变更保存并在重挂载后恢复', as
   assert.equal(restored.input('端口号').props.value, '8080')
 })
 
+test('启动按钮位于默认折叠的帮助之前', async () => {
+  const ui = await ready()
+  const nodes = ui.nodes(node => node.type === 'button' || node.type === 'details')
+  const start = nodes.findIndex(node => node.type === 'button' && node.props.className === 'btn btn-brand btn-block')
+  const help = nodes.findIndex(node => node.type === 'details' && node.props.className?.includes('folder-help'))
+  assert.ok(start >= 0 && help > start)
+  assert.ok(!nodes[help].props.open)
+})
+
 test('FRP 启动使用最新服务器快照，读取失败时不触碰现有服务', async t => {
   await t.test('uses the startup snapshot', async () => {
     let reads = 0

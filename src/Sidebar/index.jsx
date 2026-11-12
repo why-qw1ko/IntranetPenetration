@@ -1,9 +1,10 @@
-import { Radio, Link2, FolderOpen, BookOpen, Info, Settings } from 'lucide-react'
+import { Home, Radio, Link2, FolderOpen, BookOpen, Info, Settings } from 'lucide-react'
 import './index.css'
 
 const MENU = [
-  { key: 'devtunnel', icon: Radio, label: '工作台' },
-  { key: 'proxydir', icon: FolderOpen, label: '分享目录' },
+  { key: 'home', icon: Home, label: '主页' },
+  { key: 'devtunnel', icon: Radio, label: 'Microsoft Dev Tunnels' },
+  { key: 'proxydir', icon: FolderOpen, label: '共享文件夹' },
   { key: 'frp', icon: Link2, label: 'Frp 内网穿透' },
   { key: 'settings', icon: Settings, label: '设置' },
   { key: 'tutorial', icon: BookOpen, label: '教程文档' },

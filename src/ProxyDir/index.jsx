@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { ClipboardCopy, Globe, Square, Play, BookOpen, Lightbulb, Server, Link2 } from 'lucide-react'
+import { ClipboardCopy, Globe, Square, Play, BookOpen, Lightbulb, Server, Link2, Menu, ChevronDown, Info } from 'lucide-react'
 import ConfirmModal from '../ConfirmModal'
 import './index.css'
 
@@ -341,7 +341,7 @@ export default function ProxyDir ({ onToggleSidebar, onOpenSettings, showToast }
       setRunning(true)
       setServerInfo({ port: targetPort, dir: dirPath })
       try { services.saveProxyDirLastTunnel?.({ port: targetPort, tunnelId: tid }) } catch (error) { showToast('隧道已启动，但未能保存复用记录: ' + error.message, 'error') }
-      services.addProxyDirLog?.('system', '[代理目录] devtunnel 模式启动: ' + dirPath + ' -> 端口 ' + port, 'devtunnel')
+      services.addProxyDirLog?.('system', '[共享文件夹] devtunnel 模式启动: ' + dirPath + ' -> 端口 ' + port, 'devtunnel')
       showToast('正在启动...')
     } catch (error) {
       if (ownsFile) services.stopFileServer('devtunnel')
@@ -446,7 +446,7 @@ export default function ProxyDir ({ onToggleSidebar, onOpenSettings, showToast }
       activeFileModeRef.current = 'frp'
       setServerInfo({ port: targetPort, dir: dirPath })
 
-      window.services?.addProxyDirLog?.('system', '[代理目录] frp 模式启动: ' + dirPath + ' -> 端口 ' + port, 'frp')
+      window.services?.addProxyDirLog?.('system', '[共享文件夹] frp 模式启动: ' + dirPath + ' -> 端口 ' + port, 'frp')
       showToast('正在启动 frpc...')
     } catch (err) {
       setError(err.message || '启动失败')
@@ -498,7 +498,7 @@ export default function ProxyDir ({ onToggleSidebar, onOpenSettings, showToast }
     setLoading(true)
     const runningMode = activeFileModeRef.current || mode
     try {
-      window.services?.addProxyDirLog?.('system', '[代理目录] 停止代理 (' + runningMode + ' 模式)', runningMode)
+      window.services?.addProxyDirLog?.('system', '[共享文件夹] 停止代理 (' + runningMode + ' 模式)', runningMode)
       const result = runningMode === 'frp'
         ? await window.services.stopFrpc('proxydir')
         : await window.services.stopHost()
@@ -542,17 +542,15 @@ export default function ProxyDir ({ onToggleSidebar, onOpenSettings, showToast }
       <div className='topbar'>
         <div className='topbar-left'>
           <button className='topbar-menu-btn' onClick={onToggleSidebar} title='菜单'>
-            <svg width='18' height='18' viewBox='0 0 18 18' fill='none'>
-              <path d='M3 5H15M3 9H15M3 13H15' stroke='currentColor' strokeWidth='1.5' strokeLinecap='round' />
-            </svg>
+            <Menu size={18} />
           </button>
-          <span className='topbar-title'>代理目录</span>
+          <span className='topbar-title'>共享文件夹</span>
           {running && <span className='badge badge-success'>运行中</span>}
         </div>
       </div>
 
       <div className='page'>
-        <div className='form-hint'>输入框失焦时保存设置，选项修改后立即保存。</div>
+        <div className='page-notice'><Info size={16} aria-hidden='true' /><span>输入框失焦后保存，选择项修改后立即保存。</span></div>
         {Object.values(saveErrors).some(Boolean) && <div role='alert' style={{ color: 'var(--red)' }}>{Object.values(saveErrors).filter(Boolean).join('；')}</div>}
         {/* 模式选择（未运行时显示） */}
         {!running && (
@@ -757,10 +755,22 @@ export default function ProxyDir ({ onToggleSidebar, onOpenSettings, showToast }
               )}
             </div>
 
+            {/* 错误提示 */}
+            {error && (
+              <div className='card' style={{ borderLeft: '3px solid var(--red)', color: 'var(--red)', fontSize: 13 }}>
+                {error}
+              </div>
+            )}
+
+            {/* 启动按钮 */}
+            <button className='btn btn-brand btn-block' onClick={handleStart} disabled={loading}>
+              {loading && !awaitingConfirmRef.current ? <><span className='spinner' /> 启动中...</> : <><Play size={14} /> 启动代理</>}
+            </button>
+
             {/* 教程 */}
-            <div className='tutorial-card'>
-              <div className='tutorial-title'><BookOpen size={15} /> 快速上手</div>
-              <ol className='tutorial-steps'>
+            <details className='folder-help'>
+              <summary className='folder-help-title'><BookOpen size={15} /> 快速上手与常见问题 <ChevronDown className='folder-help-chevron' size={16} /></summary>
+              <ol className='folder-help-steps'>
                 <li>
                   <span className='step-num'>1</span>
                   <span>选择穿透方式{mode === 'devtunnel' ? '（免费，无需服务器）' : '（需要 frps 服务器）'}</span>
@@ -774,7 +784,7 @@ export default function ProxyDir ({ onToggleSidebar, onOpenSettings, showToast }
                   <span>
                     {mode === 'devtunnel'
                       ? '设置端口号（默认 3000，如果被占用请更换）'
-                      : '填写自定义域名（需在 frps 配置泛域名解析）'}
+                      : frpProxyType === 'tcp' ? '填写服务器上的远程端口' : '填写自定义域名并配置解析'}
                   </span>
                 </li>
                 <li>
@@ -783,34 +793,23 @@ export default function ProxyDir ({ onToggleSidebar, onOpenSettings, showToast }
                 </li>
               </ol>
 
-              <div className='tutorial-faq'>
-                <div className='tutorial-faq-title'><Lightbulb size={14} /> 常见问题</div>
-                <div className='faq-item'>
-                  <div className='faq-q'>Q: 两种方式有什么区别？</div>
-                  <div className='faq-a'>A: DevTunnel 免费但需要微软账号登录；Frp 需要自建服务器但速度更快、更灵活。</div>
+              <div className='folder-help-faq'>
+                <div className='folder-help-faq-title'><Lightbulb size={14} /> 常见问题</div>
+                <div className='folder-help-faq-item'>
+                  <div className='folder-help-faq-q'>Q: 两种方式有什么区别？</div>
+                  <div className='folder-help-faq-a'>A: DevTunnel 免费但需要微软账号登录；Frp 需要自建服务器，适合需要自行管理服务的场景。</div>
                 </div>
-                <div className='faq-item'>
-                  <div className='faq-q'>Q: 支持哪些文件类型？</div>
-                  <div className='faq-a'>A: 支持所有文件类型。HTML/CSS/JS/图片等常见格式会直接在浏览器中预览，其他文件会触发下载。</div>
+                <div className='folder-help-faq-item'>
+                  <div className='folder-help-faq-q'>Q: 支持哪些文件类型？</div>
+                  <div className='folder-help-faq-a'>A: 支持所有文件类型。HTML/CSS/JS/图片等常见格式会直接在浏览器中预览，其他文件会触发下载。</div>
                 </div>
-                <div className='faq-item'>
-                  <div className='faq-q'>Q: 端口被占用怎么办？</div>
-                  <div className='faq-a'>A: 更换一个未被使用的端口号即可，如 3001、8080 等。</div>
+                <div className='folder-help-faq-item'>
+                  <div className='folder-help-faq-q'>Q: 端口被占用怎么办？</div>
+                  <div className='folder-help-faq-a'>A: 更换一个未被使用的端口号即可，如 3001、8080 等。</div>
                 </div>
               </div>
-            </div>
+            </details>
 
-            {/* 错误提示 */}
-            {error && (
-              <div className='card' style={{ borderLeft: '3px solid var(--red)', color: 'var(--red)', fontSize: 13 }}>
-                {error}
-              </div>
-            )}
-
-            {/* 启动按钮 */}
-            <button className='btn btn-brand btn-block' onClick={handleStart} disabled={loading}>
-              {loading && !awaitingConfirmRef.current ? <><span className='spinner' /> 启动中...</> : <><Play size={14} /> 启动代理</>}
-            </button>
           </>
         )}
       </div>

@@ -72,6 +72,21 @@
   cursor: default;
 }
 
+.frp-proxy-card.frp-proxy-conflict {
+  border-color: var(--red);
+}
+
+.frp-conflicts {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--red-bg);
+  color: var(--red);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
 .frp-proxy-top {
   display: flex;
   align-items: center;
@@ -183,6 +198,18 @@
   flex: 1;
 }
 
+.frp-server-details {
+  display: grid;
+  gap: 8px;
+  color: var(--text-sub);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.frp-server-details .status-info {
+  margin: 0;
+}
+
 .frp-server-actions {
   display: flex;
   gap: 8px;
@@ -194,6 +221,9 @@
 }
 
 .frp-guide-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 14px;
   font-weight: 600;
   color: var(--text-title);
@@ -205,6 +235,13 @@
   color: var(--text-sub);
   line-height: 1.7;
   margin-bottom: 8px;
+}
+
+.frp-guide-download {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
 .frp-guide-link {

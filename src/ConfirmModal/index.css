@@ -19,6 +19,11 @@
 .confirm-actions .btn {
   min-width: 90px;
   padding: 8px 20px;
+  border: 1px solid transparent;
+}
+
+.confirm-actions .btn-ghost {
+  border-color: var(--border);
 }
 
 .confirm-actions { flex-wrap: wrap; }

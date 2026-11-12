@@ -133,15 +133,42 @@
 }
 
 /* 教程卡片 */
-.tutorial-card {
+.folder-help {
   background: var(--bg);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   padding: 18px;
-  margin-bottom: 12px;
+  margin: 12px 0;
+  border: 1px solid var(--border);
 }
 
-.tutorial-title {
+.folder-help summary {
+  cursor: pointer;
+}
+
+.folder-help summary:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 4px;
+}
+
+.folder-help-chevron {
+  margin-left: auto;
+  transition: transform 200ms;
+}
+
+.folder-help[open] .folder-help-chevron {
+  transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .folder-help-chevron { transition: none; }
+}
+
+.folder-help:not([open]) .folder-help-title {
+  margin-bottom: 0;
+}
+
+.folder-help-title {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -151,13 +178,13 @@
   margin-bottom: 14px;
 }
 
-.tutorial-steps {
+.folder-help-steps {
   list-style: none;
   padding: 0;
   margin: 0 0 16px 0;
 }
 
-.tutorial-steps li {
+.folder-help-steps li {
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -167,7 +194,7 @@
   line-height: 1.5;
 }
 
-.tutorial-steps .step-num {
+.folder-help-steps .step-num {
   flex-shrink: 0;
   width: 22px;
   height: 22px;
@@ -181,31 +208,34 @@
   font-weight: 600;
 }
 
-.tutorial-faq {
+.folder-help-faq {
   margin-top: 12px;
   padding-top: 12px;
   border-top: 1px solid var(--border);
 }
 
-.tutorial-faq-title {
+.folder-help-faq-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 13px;
   font-weight: 600;
   color: var(--text-title);
   margin-bottom: 10px;
 }
 
-.faq-item {
+.folder-help-faq-item {
   margin-bottom: 10px;
 }
 
-.faq-q {
+.folder-help-faq-q {
   font-size: 12px;
   font-weight: 600;
   color: var(--text);
   margin-bottom: 2px;
 }
 
-.faq-a {
+.folder-help-faq-a {
   font-size: 12px;
   color: var(--text-sub);
   line-height: 1.5;
@@ -242,26 +272,6 @@
   50% { opacity: 0.4; }
 }
 
-.status-info {
-  font-size: 12px;
-  color: var(--text-sub);
-  margin-bottom: 6px;
-  display: flex;
-  gap: 6px;
-}
-
-.status-info-label {
-  color: var(--text-muted);
-  flex-shrink: 0;
-}
-
-.status-info-value {
-  color: var(--text);
-  font-family: 'Cascadia Code', 'Fira Code', monospace;
-  font-size: 11px;
-  word-break: break-all;
-}
-
 .status-url {
   display: flex;
   align-items: center;
@@ -288,6 +298,9 @@
 }
 
 .status-url-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 11px;
   color: var(--text-muted);
   flex-shrink: 0;

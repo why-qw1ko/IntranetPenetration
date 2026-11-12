@@ -8,9 +8,9 @@ export default function TutorialPage ({ onToggleSidebar }) {
 
   const FaqItem = ({ k, q, children }) => (
     <div className='tutorial-faq-item'>
-      <div className={`tutorial-faq-q ${faqOpen[k] ? 'expanded' : ''}`} onClick={() => toggleFaq(k)}>
-        {q}<span><ChevronRight size={14} /></span>
-      </div>
+      <button type='button' className={`tutorial-faq-q ${faqOpen[k] ? 'expanded' : ''}`} onClick={() => toggleFaq(k)} aria-expanded={Boolean(faqOpen[k])}>
+        <span>{q}</span><ChevronRight className='tutorial-faq-chevron' size={14} />
+      </button>
       {faqOpen[k] && <div className='tutorial-faq-a'>{children}</div>}
     </div>
   )
@@ -19,7 +19,7 @@ export default function TutorialPage ({ onToggleSidebar }) {
     <div className='content-wrap'>
       <div className='topbar'>
         <div className='topbar-left'>
-          <button className='topbar-menu-btn' onClick={onToggleSidebar}><Menu size={18} /></button>
+          <button className='topbar-menu-btn' onClick={onToggleSidebar} title='菜单'><Menu size={18} /></button>
           <span className='topbar-title'>教程文档</span>
         </div>
       </div>
@@ -33,26 +33,27 @@ export default function TutorialPage ({ onToggleSidebar }) {
             <div className='tutorial-card'>
               <div className='tutorial-card-title'>什么是 DevTunnel？</div>
               <p style={{ fontSize: 13, color: 'var(--text)', lineHeight: 1.8, marginBottom: 10 }}>
-                DevTunnel 是微软 Azure 提供的免费内网穿透服务，基于全球 Azure 基础设施运行。
-                它可以将你的本地开发服务器暴露到公网，生成一个 <code>*.devtunnels.ms</code> 的 HTTPS 域名，
-                任何人都可以通过这个域名访问你的本地服务。
+                Microsoft Dev Tunnels 可将本地服务通过隧道提供给其他设备访问。
+                创建隧道时可选择是否允许匿名访问；请在分享链接前检查访问权限。
               </p>
               <div className='tutorial-tip'>
-                <b><Lightbulb size={13} /> 特点：</b>完全免费、无需注册（GitHub 登录即可）、自动 HTTPS、全球加速节点、支持 TCP 和 HTTP 协议。
+                <Lightbulb size={14} aria-hidden='true' />
+                <div><b>使用前：</b>安装 devtunnel 命令行工具，并使用 Microsoft 或 GitHub 账号登录。</div>
               </div>
             </div>
 
             <div className='tutorial-card'>
               <div className='tutorial-card-title'>快速开始</div>
               <ol className='tutorial-steps'>
-                <li>点击左侧菜单「免费内网穿透」，进入主界面。</li>
-                <li>点击「GitHub 登录」或「Microsoft 登录」，在弹出的浏览器页面完成授权。</li>
-                <li>登录成功后，点击「新建隧道」，填写隧道名称和本地端口（如 <code>3000</code>）。</li>
+                <li>打开左侧菜单「Microsoft Dev Tunnels」。</li>
+                <li>点击「登录」，选择 Microsoft 或 GitHub 账号，在浏览器中完成授权。</li>
+                <li>点击「新建隧道」，填写本地端口（如 <code>3000</code>），按需设置访问权限。</li>
                 <li>隧道创建成功后，在列表中点击「启动」，等待连接建立。</li>
-                <li>连接成功后会显示一个 <code>https://xxx.devtunnels.ms</code> 的地址，复制后即可在任何设备上访问。</li>
+                <li>连接成功后复制显示的地址，在有权限的设备上访问。</li>
               </ol>
               <div className='tutorial-tip'>
-                <b><Lightbulb size={13} /> 提示：</b>隧道创建后会自动持久化保存，下次打开 uTools 无需重新创建，直接启动即可。
+                <Lightbulb size={14} aria-hidden='true' />
+                <div><b>提示：</b>已创建的隧道可在列表中再次启动；隧道失效后需重新创建。</div>
               </div>
             </div>
 
@@ -67,26 +68,27 @@ export default function TutorialPage ({ onToggleSidebar }) {
             </div>
 
             <div className='tutorial-card'>
-              <div className='tutorial-card-title'>目录代理功能</div>
+              <div className='tutorial-card-title'>共享文件夹</div>
               <p style={{ fontSize: 13, color: 'var(--text)', lineHeight: 1.8, marginBottom: 10 }}>
-                如果你想快速共享本地的一个文件夹，可以使用「目录代理」功能：
+                如果你想快速共享本地的一个文件夹，可以使用「共享文件夹」功能：
               </p>
               <ol className='tutorial-steps'>
-                <li>点击左侧菜单「代理目录」，进入目录代理页面。</li>
+                <li>点击左侧菜单「共享文件夹」，进入文件夹共享页面。</li>
                 <li>选择要共享的文件夹路径，设置端口（默认 3000）。</li>
-                <li>点击「启动目录代理」，系统会自动创建一个本地 HTTP 服务器并启动穿透。</li>
+                <li>点击「启动代理」，系统会自动创建一个本地 HTTP 服务器并启动穿透。</li>
                 <li>生成的公网地址可以直接在浏览器中打开，浏览文件夹内容并下载文件。</li>
               </ol>
               <div className='tutorial-warning'>
-                <b><AlertTriangle size={13} /> 注意：</b>目录代理会将文件夹内容完全暴露到公网，请勿共享包含敏感信息的目录。建议仅在调试和临时分享时使用。
+                <AlertTriangle size={14} aria-hidden='true' />
+                <div><b>注意：</b>共享前请检查文件内容和访问权限；允许匿名访问时，持有链接的人可访问文件。</div>
               </div>
             </div>
 
             <div className='tutorial-card'>
               <div className='tutorial-card-title'>常见问题</div>
               <ul className='tutorial-steps'>
-                <li><b>隧道显示「已过期」</b> — DevTunnel 免费隧道有 30 天有效期，过期后需重新创建。</li>
-                <li><b>连接速度慢</b> — DevTunnel 服务器在海外，国内访问可能有延迟。如需更快的速度，建议使用 Frp 内网穿透。</li>
+                <li><b>隧道已过期</b> — 检查隧道状态，必要时重新创建。</li>
+                <li><b>连接速度慢</b> — 检查本地网络和服务状态；速度也受隧道服务和网络线路影响。</li>
                 <li><b>启动失败</b> — 检查本地端口是否被占用，确认 devtunnel.exe 路径正确（可在设置中修改）。</li>
                 <li><b>登录超时</b> — 网络问题可能导致登录流程超时，检查网络后重试。如持续失败，可尝试重新打开 uTools。</li>
               </ul>
@@ -100,15 +102,12 @@ export default function TutorialPage ({ onToggleSidebar }) {
             <div className='tutorial-card'>
               <div className='tutorial-card-title'>什么是 Frp？</div>
               <p style={{ fontSize: 13, color: 'var(--text)', lineHeight: 1.8, marginBottom: 10 }}>
-                Frp（Fast Reverse Proxy）是一款开源的高性能内网穿透工具，由 fatedier 开发维护。
-                它通过在公网服务器上部署服务端（frps），在内网机器上运行客户端（frpc），
-                将内网服务安全地暴露到公网。相比 DevTunnel，Frp 的优势在于：
+                FRP（Fast Reverse Proxy）通过服务器上的 frps 和本机的 frpc 转发服务。
+                使用前需要准备可访问的服务器，并安装相应程序。
               </p>
               <ul className='tutorial-steps'>
-                <li><b>速度更快</b> — 数据不经过第三方服务器，直连你自己的服务器，延迟更低。</li>
-                <li><b>完全可控</b> — 服务器在你手里，不受第三方服务条款限制，没有使用时长和流量限制。</li>
-                <li><b>协议丰富</b> — 支持 TCP、UDP、HTTP、HTTPS、STCP 等多种协议。</li>
-                <li><b>永久免费</b> — 开源项目，Apache 2.0 协议，可自由使用和修改。</li>
+                <li><b>服务器</b> — 自行部署和维护 frps，服务器费用及流量限制以服务商为准。</li>
+                <li><b>代理类型</b> — 本插件支持 TCP 和 HTTP；FRP 本身支持更多类型。</li>
               </ul>
             </div>
 
@@ -129,37 +128,38 @@ export default function TutorialPage ({ onToggleSidebar }) {
                   <tr>
                     <td><b>VPS</b>（Virtual Private Server）</td>
                     <td>虚拟专用服务器，通过虚拟化技术将一台物理服务器划分为多个独立的虚拟服务器。每个 VPS 有独立的操作系统、公网 IP 和资源配额。</td>
-                    <td><CheckCircle2 size={14} style={{ color: 'var(--green)', verticalAlign: 'middle' }} /> 完全支持</td>
+                    <td><span className='tutorial-table-status'><CheckCircle2 size={14} style={{ color: 'var(--green)' }} aria-hidden='true' /><span>完全支持</span></span></td>
                   </tr>
                   <tr>
                     <td><b>云服务器</b>（ECS / CVM / EC2）</td>
                     <td>阿里云 ECS、腾讯云 CVM、华为云 ECS、AWS EC2 等，本质也是虚拟服务器，但由云厂商提供更完善的管理面板和技术支持。</td>
-                    <td><CheckCircle2 size={14} style={{ color: 'var(--green)', verticalAlign: 'middle' }} /> 完全支持</td>
+                    <td><span className='tutorial-table-status'><CheckCircle2 size={14} style={{ color: 'var(--green)' }} aria-hidden='true' /><span>完全支持</span></span></td>
                   </tr>
                   <tr>
                     <td><b>轻量应用服务器</b></td>
                     <td>云厂商推出的简化版云服务器，预装常见应用镜像，价格更低，适合个人开发者。功能上与标准云服务器相同，有公网 IP，可以自由安装软件。</td>
-                    <td><CheckCircle2 size={14} style={{ color: 'var(--green)', verticalAlign: 'middle' }} /> 完全支持</td>
+                    <td><span className='tutorial-table-status'><CheckCircle2 size={14} style={{ color: 'var(--green)' }} aria-hidden='true' /><span>完全支持</span></span></td>
                   </tr>
                   <tr>
                     <td><b>物理服务器 / 独立服务器</b></td>
                     <td>实体硬件服务器，通常托管在 IDC 机房，有公网 IP。</td>
-                    <td><CheckCircle2 size={14} style={{ color: 'var(--green)', verticalAlign: 'middle' }} /> 完全支持</td>
+                    <td><span className='tutorial-table-status'><CheckCircle2 size={14} style={{ color: 'var(--green)' }} aria-hidden='true' /><span>完全支持</span></span></td>
                   </tr>
                   <tr>
                     <td><b>NAT VPS</b></td>
                     <td>没有独立公网 IP 的 VPS，只能通过端口映射访问。部分 NAT VPS 可以做 Frp 服务端，但需要额外配置。</td>
-                    <td><AlertTriangle size={14} style={{ color: 'var(--orange)', verticalAlign: 'middle' }} /> 有限支持</td>
+                    <td><span className='tutorial-table-status'><AlertTriangle size={14} style={{ color: 'var(--orange)' }} aria-hidden='true' /><span>有限支持</span></span></td>
                   </tr>
                   <tr>
                     <td><b>家宽 / 办公网络</b></td>
                     <td>家庭宽带或公司内网，通常没有公网 IP（或为动态 IP）。</td>
-                    <td><XCircle size={14} style={{ color: 'var(--red)', verticalAlign: 'middle' }} /> 仅能做客户端</td>
+                    <td><span className='tutorial-table-status'><XCircle size={14} style={{ color: 'var(--red)' }} aria-hidden='true' /><span>仅能做客户端</span></span></td>
                   </tr>
                 </tbody>
               </table>
               <div className='tutorial-tip'>
-                <b><Lightbulb size={13} /> 推荐：</b>对于个人使用，各大云厂商的「轻量应用服务器」性价比最高。腾讯云轻量应用服务器 2核2G 约 50-100 元/年，阿里云类似。购买时选择离你最近的地域（如上海、广州），延迟更低。
+                <Lightbulb size={14} aria-hidden='true' />
+                <div><b>选购：</b>确认服务器可从公网访问，并根据服务商的价格、流量和带宽选择配置。</div>
               </div>
             </div>
 
@@ -180,40 +180,16 @@ export default function TutorialPage ({ onToggleSidebar }) {
                 Frps 是 Frp 的服务端程序，需要安装在有公网 IP 的服务器上。以下是各种安装方式：
               </p>
 
-              <div className='tutorial-sub-title'>方式一：一键脚本安装（推荐新手）</div>
-              <p style={{ fontSize: 13, color: 'var(--text)', lineHeight: 1.8, marginBottom: 10 }}>
-                通过 SSH 登录服务器后，执行以下命令：
-              </p>
-              <div className='tutorial-code'>{`# 下载并执行一键安装脚本
-curl -fsSL https://raw.githubusercontent.com/fatedier/frp/master/install.sh | bash
-
-# 如果上面的命令无法访问（国内网络），使用镜像
-curl -fsSL https://ghproxy.com/https://raw.githubusercontent.com/fatedier/frp/master/install.sh | bash`}
-              </div>
-              <p style={{ fontSize: 13, color: 'var(--text)', lineHeight: 1.8, marginBottom: 10 }}>
-                脚本会自动下载最新版本并安装到 <code>/usr/local/bin/frps</code>。
-              </p>
-
-              <div className='tutorial-sub-title'>方式二：手动下载安装</div>
-              <div className='tutorial-code'>{`# 查看最新版本：https://github.com/fatedier/frp/releases
-# 以 v0.69.1 为例，Linux amd64 架构
-
-# 下载
-wget https://github.com/fatedier/frp/releases/download/v0.69.1/frp_0.69.1_linux_amd64.tar.gz
-
-# 如果 GitHub 访问慢，使用镜像站
-wget https://ghproxy.com/https://github.com/fatedier/frp/releases/download/v0.69.1/frp_0.69.1_linux_amd64.tar.gz
-
-# 解压
-tar -xzf frp_0.69.1_linux_amd64.tar.gz
-cd frp_0.69.1_linux_amd64
-
-# 复制到系统目录
-sudo cp frps /usr/local/bin/
-sudo chmod +x /usr/local/bin/frps`}
+              <div className='tutorial-sub-title'>方式一：下载安装</div>
+              <ol className='tutorial-steps'>
+                <li>在 FRP 官方 GitHub Releases 下载与服务器系统和架构对应的压缩包。</li>
+                <li>解压后将 <code>frps</code> 放到服务器可执行路径中，并创建配置文件。</li>
+              </ol>
+              <div className='tutorial-code'>{`# 在已解压的 FRP 目录中执行
+sudo install -m 755 frps /usr/local/bin/frps`}
               </div>
 
-              <div className='tutorial-sub-title'>方式三：Docker 安装</div>
+              <div className='tutorial-sub-title'>方式二：Docker 安装</div>
               <div className='tutorial-code'>{`# 创建配置文件目录
 mkdir -p /etc/frp
 
@@ -226,7 +202,7 @@ docker run -d \\
   snowdreamtech/frps:latest`}
               </div>
 
-              <div className='tutorial-sub-title'>方式四：宝塔面板安装</div>
+              <div className='tutorial-sub-title'>方式三：宝塔面板安装</div>
               <p style={{ fontSize: 13, color: 'var(--text)', lineHeight: 1.8, marginBottom: 10 }}>
                 如果你使用宝塔面板管理服务器，可以通过「软件商店」搜索 Frp 一键安装，或者使用宝塔的「Docker 管理器」部署 Frp 容器。
               </p>
@@ -272,7 +248,8 @@ allowPorts = [
 ]`}
               </div>
               <div className='tutorial-warning'>
-                <b><AlertTriangle size={13} /> 重要：</b>请务必修改 <code>auth.token</code> 为一个强密码！否则任何人都可以连接你的 Frp 服务端。
+                <AlertTriangle size={14} aria-hidden='true' />
+                <div><b>重要：</b>请务必修改 <code>auth.token</code> 为一个强密码！否则任何人都可以连接你的 Frp 服务端。</div>
               </div>
             </div>
 
@@ -318,7 +295,7 @@ sudo systemctl status frps`}
               <div className='tutorial-card-title'>第四步：在本插件中配置 Frpc（客户端）</div>
               <ol className='tutorial-steps'>
                 <li>点击左侧菜单「设置」，配置本机 frpc 可执行文件路径。</li>
-                <li>在「FRP 服务器」区域填写你的服务器信息，内网穿透与分享目录共用此配置。</li>
+                <li>在「FRP 服务器」区域填写你的服务器信息，内网穿透与共享文件夹共用此配置。</li>
               </ol>
               <div className='tutorial-step-detail'>
                 <div><b>服务器地址</b> — 你的服务器公网 IP 或域名（如 <code>123.45.67.89</code>）</div>
@@ -366,7 +343,8 @@ sudo systemctl status frps`}
                 </tbody>
               </table>
               <div className='tutorial-tip'>
-                <b><Lightbulb size={13} /> HTTP 代理需要域名：</b>使用 HTTP 代理时，你需要拥有一个域名，并将域名的 DNS 解析（A 记录）指向你的 Frp 服务器 IP。如果还没有域名，可以先使用 TCP 代理。
+                <Lightbulb size={14} aria-hidden='true' />
+                <div><b>HTTP 代理需要域名：</b>使用 HTTP 代理时，你需要拥有一个域名，并将域名的 DNS 解析（A 记录）指向你的 Frp 服务器 IP。如果还没有域名，可以先使用 TCP 代理。</div>
               </div>
             </div>
 
@@ -447,22 +425,13 @@ sudo ufw enable`}
               <FaqItem k='faq1' q='DevTunnel 和 Frp 应该选哪个？'>
                 <p><b>选 DevTunnel 的情况：</b>没有服务器、不想花钱、临时使用、对速度要求不高、需要快速上手。</p>
                 <p style={{ marginTop: 8 }}><b>选 Frp 的情况：</b>有自己的服务器、需要长期稳定使用、对速度和延迟有要求、需要更灵活的配置。</p>
-                <p style={{ marginTop: 8 }}>两者可以同时使用，互不影响。建议先用 DevTunnel 体验，有需要再搭建 Frp。</p>
+                <p style={{ marginTop: 8 }}>共享文件夹也可以选择其中一种方式。</p>
               </FaqItem>
-              <FaqItem k='faq2' q='Frp 服务端对服务器配置有什么要求？'>
-                <p>Frp 服务端非常轻量，<b>最低 1 核 512MB 内存</b>即可。推荐配置：</p>
-                <p style={{ marginTop: 4 }}>• 个人使用：1 核 1G，3Mbps 带宽</p>
-                <p>• 小团队（5-10 人）：2 核 2G，5Mbps 带宽</p>
-                <p>• 大量并发：2 核 4G，10Mbps 带宽以上</p>
-                <p style={{ marginTop: 8 }}>带宽是主要瓶颈，Frp 本身 CPU 和内存占用极低。</p>
+              <FaqItem k='faq2' q='FRP 服务端需要什么配置？'>
+                <p>根据并发连接数、流量和其他服务的资源占用选择配置。检查服务器带宽、流量额度和所需端口是否开放。</p>
               </FaqItem>
-              <FaqItem k='faq3' q='轻量应用服务器和标准云服务器有什么区别？'>
-                <p>轻量应用服务器是云厂商推出的简化版产品，主要区别：</p>
-                <p style={{ marginTop: 4 }}>• <b>价格更低</b>：通常比同配置标准云服务器便宜 30-50%</p>
-                <p>• <b>功能简化</b>：不支持 VPC 高级网络、不支持挂载多块数据盘等</p>
-                <p>• <b>套餐计费</b>：通常包含固定带宽和流量包，超出后限速</p>
-                <p>• <b>预装镜像</b>：提供 WordPress、LAMP 等应用镜像一键部署</p>
-                <p style={{ marginTop: 8 }}>对于运行 Frp 来说，轻量应用服务器完全够用，性价比更高。</p>
+              <FaqItem k='faq3' q='如何选择云服务器？'>
+                <p>确认服务器有可访问的地址，能够安装 frps，并按实际流量、带宽和价格选择套餐。</p>
               </FaqItem>
               <FaqItem k='faq4' q='frpc.exe 从哪里获取？'>
                 <p>两种方式：</p>
@@ -474,7 +443,7 @@ sudo ufw enable`}
                 <p>穿透速度主要取决于以下因素：</p>
                 <p style={{ marginTop: 4 }}>• <b>你的本地网络上行带宽</b>（通常是最大瓶颈）</p>
                 <p>• <b>服务器的带宽</b>（Frp 模式下）</p>
-                <p>• <b>中间网络链路质量</b>（DevTunnel 经过海外服务器，延迟较高）</p>
+                <p>• <b>中间网络链路质量</b>（不同地区和网络可能有差异）</p>
                 <p>• <b>服务器与你的物理距离</b>（选近的服务器延迟更低）</p>
                 <p style={{ marginTop: 8 }}>DevTunnel 适合调试和演示，Frp 内网穿透适合长期使用和对速度有要求的场景。</p>
               </FaqItem>

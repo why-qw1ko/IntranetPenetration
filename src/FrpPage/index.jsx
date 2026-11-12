@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { Server, Link2, Square, Play, Pencil, Trash2, BookOpen, Download, ClipboardCopy, Menu } from 'lucide-react'
+import { Server, Link2, Square, Play, Pencil, Trash2, BookOpen, Download, ClipboardCopy, Copy, Menu } from 'lucide-react'
 import ConfirmModal from '../ConfirmModal'
 import './index.css'
 
@@ -41,6 +41,15 @@ export default function FrpPage ({ onToggleSidebar, onOpenSettings, showToast })
   const ownProcess = frpcStatus.running && frpcStatus.source === 'frp'
   const selectedProxies = proxies.filter(proxy => selectedNames.includes(proxy.name.trim()))
   const allSelected = proxies.length > 0 && selectedProxies.length === proxies.length
+  const selectedPorts = new Map()
+  for (const proxy of selectedProxies) {
+    const port = proxy.type === 'tcp' ? parsePort(proxy.remotePort) : null
+    if (!port) continue
+    if (!selectedPorts.has(port)) selectedPorts.set(port, [])
+    selectedPorts.get(port).push(proxy.name.trim())
+  }
+  const portConflicts = [...selectedPorts].filter(([port, names]) => names.length > 1 || port === parsePort(config.serverPort))
+  const conflictingNames = new Set(portConflicts.flatMap(([, names]) => names))
   const logEndRef = useRef(null)
 
   // 保存 tab 记忆（本地存储）
@@ -136,6 +145,25 @@ export default function FrpPage ({ onToggleSidebar, onOpenSettings, showToast })
       customDomain: p.customDomain || ''
     })
     setEditingIdx(idx)
+    setError('')
+    setShowForm(true)
+  }, [proxies])
+
+  const openCopyForm = useCallback((idx) => {
+    const p = proxies[idx]
+    const existingNames = new Set(proxies.map(proxy => proxy.name.trim()))
+    const baseName = p.name.trim() + '-副本'
+    let name = baseName
+    let suffix = 2
+    while (existingNames.has(name)) name = baseName + '-' + suffix++
+    setForm({
+      name,
+      type: p.type,
+      localPort: String(p.localPort),
+      remotePort: String(p.remotePort || ''),
+      customDomain: p.customDomain || ''
+    })
+    setEditingIdx(-1)
     setError('')
     setShowForm(true)
   }, [proxies])
@@ -322,10 +350,12 @@ export default function FrpPage ({ onToggleSidebar, onOpenSettings, showToast })
               <span className='card-title'><Server size={15} /> 服务器配置</span>
             </div>
 
-            <div className='form-hint'>服务器统一在设置页管理，内网穿透与代理目录共用。</div>
-            <div className='status-info'>
-              <span className='status-info-label'>服务器</span>
-              <span className='status-info-value'>{loaded ? (config.serverAddr ? `${config.serverAddr}:${config.serverPort || 7000}` : '尚未配置') : '读取中…'}</span>
+            <div className='frp-server-details'>
+              <div>服务器统一在设置页管理，内网穿透与共享文件夹共用。</div>
+              <div className='status-info'>
+                <span className='status-info-label'>服务器</span>
+                <span className='status-info-value'>{loaded ? (config.serverAddr ? `${config.serverAddr}:${config.serverPort || 7000}` : '尚未配置') : '读取中…'}</span>
+              </div>
             </div>
             <div className='frp-server-actions'>
               <button className='btn btn-ghost btn-sm' onClick={onOpenSettings}>前往设置</button>
@@ -334,10 +364,10 @@ export default function FrpPage ({ onToggleSidebar, onOpenSettings, showToast })
 
           {frpcStatus.running && (
             <div className='card frp-runtime-summary' role='status'>
-              <div>当前由「{frpcStatus.source === 'proxydir' ? '代理目录' : 'Frp 内网穿透'}」启动 · PID {frpcStatus.pid}</div>
+              <div>当前由「{frpcStatus.source === 'proxydir' ? '共享文件夹' : 'Frp 内网穿透'}」启动 · PID {frpcStatus.pid}</div>
               <div>{frpcStatus.serverAddr}:{frpcStatus.serverPort}</div>
               <div>本次代理：{frpcStatus.proxies?.map(proxy => proxy.name).join('、')}</div>
-              {!ownProcess && <div>请到「代理目录」停止后，再启动此处的代理。</div>}
+              {!ownProcess && <div>请到「共享文件夹」停止后，再启动此处的代理。</div>}
             </div>
           )}
 
@@ -351,7 +381,7 @@ export default function FrpPage ({ onToggleSidebar, onOpenSettings, showToast })
                     <button className='btn btn-warning btn-sm' onClick={handleStopAll} disabled={operating || frpcStatus.state === 'stopping'}><Square size={13} /> 停止本次启动</button>
                     )
                   : (
-                    <button className='btn btn-brand btn-sm' onClick={handleStartSelected} disabled={locked || selectedProxies.length === 0}><Play size={13} /> 启动选中 ({selectedProxies.length})</button>
+                    <button className='btn btn-brand btn-sm' onClick={handleStartSelected} disabled={locked || selectedProxies.length === 0 || portConflicts.length > 0}><Play size={13} /> 启动选中 ({selectedProxies.length})</button>
                     )}
                 <button className='btn btn-ghost btn-sm' onClick={openCreateForm} disabled={locked}>+ 新建代理</button>
               </div>
@@ -372,6 +402,15 @@ export default function FrpPage ({ onToggleSidebar, onOpenSettings, showToast })
               </div>
             )}
 
+            {portConflicts.length > 0 && (
+              <div className='frp-conflicts' role='status' aria-live='polite'>
+                <div>远程端口冲突，请取消勾选冲突的代理或修改端口后再启动：</div>
+                {portConflicts.map(([port, names]) => (
+                  <div key={port}>端口 {port}：{names.join('、')}{port === parsePort(config.serverPort) ? '（与服务器监听端口相同）' : ''}</div>
+                ))}
+              </div>
+            )}
+
             {proxies.length === 0
               ? (
                 <div className='empty' style={{ padding: '24px 0' }}>
@@ -386,7 +425,7 @@ export default function FrpPage ({ onToggleSidebar, onOpenSettings, showToast })
                     const runtime = frpcStatus.source === 'frp' ? frpcStatus.proxies?.find(item => item.name === proxy.name.trim()) : null
                     const labels = { starting: '启动中', running: '运行中', error: '启动失败', stopped: '已停止' }
                     return (
-                      <div key={idx} className='card frp-proxy-card' style={{ marginBottom: 8 }}>
+                      <div key={idx} className={`card frp-proxy-card${conflictingNames.has(proxy.name.trim()) ? ' frp-proxy-conflict' : ''}`} style={{ marginBottom: 8 }}>
                         <div className='frp-proxy-top'>
                           <label className='frp-proxy-select'>
                             <input
@@ -398,6 +437,7 @@ export default function FrpPage ({ onToggleSidebar, onOpenSettings, showToast })
                             />
                             <span className='frp-proxy-name'>{proxy.name}</span>
                           </label>
+                          {conflictingNames.has(proxy.name.trim()) && <span className='badge badge-red'>端口冲突</span>}
                           <span className='frp-proxy-type'>{proxy.type.toUpperCase()}</span>
                           <span className={runtime?.status === 'running' ? 'badge badge-success' : runtime?.status === 'error' ? 'badge badge-red' : 'badge badge-blue'}>{labels[runtime?.status] || '未启动'}</span>
                         </div>
@@ -415,6 +455,7 @@ export default function FrpPage ({ onToggleSidebar, onOpenSettings, showToast })
                         )}
                         <div className='frp-proxy-actions'>
                           <button className='btn btn-ghost btn-sm' onClick={() => openEditForm(idx)} disabled={locked}><Pencil size={13} /> 编辑</button>
+                          <button className='btn btn-ghost btn-sm' onClick={() => openCopyForm(idx)} disabled={locked} aria-label={'复制代理 ' + proxy.name}><Copy size={13} /> 复制</button>
                           <button className='btn btn-ghost btn-sm' onClick={() => handleDeleteProxy(idx)} disabled={locked} style={{ color: 'var(--red)' }}><Trash2 size={13} /> 删除</button>
                         </div>
                       </div>
@@ -431,7 +472,7 @@ export default function FrpPage ({ onToggleSidebar, onOpenSettings, showToast })
               <div className='frp-guide-text'>2. 在「设置」中填写服务器地址和 Token</div>
               <div className='frp-guide-text'>3. 点击「新建代理」添加代理规则</div>
               <div className='frp-guide-text'>4. 勾选需要的代理，点击「启动选中」，一个 frpc 进程只启动勾选的代理规则，等待列表显示「运行中」</div>
-              <div className='frp-guide-text' style={{ marginTop: 8 }}>
+              <div className='frp-guide-text frp-guide-download' style={{ marginTop: 8 }}>
                 <Download size={13} /> 需要 frpc？
                 <a
                   className='frp-guide-link'
@@ -520,6 +561,9 @@ export default function FrpPage ({ onToggleSidebar, onOpenSettings, showToast })
                 <label className='form-label' htmlFor='frppage-field-5'>自定义域名 *</label>
                 <input id='frppage-field-5' className='form-input' type='text' value={form.customDomain} disabled={locked} onChange={(e) => setForm(prev => ({ ...prev, customDomain: e.target.value }))} placeholder='web.your-server.com' />
                 <div className='form-hint'>需要在 frps 配置泛域名解析</div>
+                {editingIdx < 0 && form.customDomain && proxies.some(proxy => proxy.type === 'http' && proxy.customDomain?.trim().toLowerCase().replace(/\.$/, '') === form.customDomain.trim().toLowerCase().replace(/\.$/, '')) && (
+                  <div className='form-hint' style={{ color: 'var(--red)' }}>该域名已被其他代理使用，请修改后创建</div>
+                )}
               </div>
             )}
 

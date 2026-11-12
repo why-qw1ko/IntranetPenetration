@@ -207,8 +207,15 @@ function runCommand (args, timeout = 30000) {
     execFile(devtunnelPath, args, { encoding: 'buffer', timeout, windowsHide: true }, (error, stdout, stderr) => {
       const out = decodeOutput(stdout).trim()
       const err = decodeOutput(stderr).trim()
-      if (error) reject(new Error(err || out || error.message))
-      else resolve(out)
+      if (error) {
+        const failure = new Error(err || out || error.message)
+        failure.code = error.code
+        failure.killed = error.killed
+        failure.signal = error.signal
+        failure.stdout = out
+        failure.stderr = err
+        reject(failure)
+      } else resolve(out)
     })
   })
 }
@@ -300,12 +307,22 @@ window.services = {
   // ==================== 登录 ====================
 
   async getLoginStatus () {
+    const parseStatus = text => {
+      const lines = text.split(/\r?\n/).map(line => line.trim())
+      if (lines.some(line => /^Not logged in\.?$/i.test(line))) return { state: 'loggedOut' }
+      if (lines.some(line => /^Logged in (?:as \S.* using |using )\S.*$/i.test(line))) return { state: 'loggedIn' }
+      return null
+    }
     try {
-      const result = await runCommand(['limits'], 10000)
-      const lines = result.split('\n').filter(l => l.trim())
-      return { loggedIn: true, info: result, summary: lines[0] || '已登录' }
+      const result = await runCommand(['user', 'show'], 10000)
+      return parseStatus(result) || { state: 'checkFailed', reason: 'unknownOutput' }
     } catch (e) {
-      return { loggedIn: false, info: '', summary: '未登录' }
+      if (e.code === 'ENOENT') return { state: 'checkFailed', reason: 'notFound' }
+      if (e.code === 'EACCES' || e.code === 'EPERM') return { state: 'checkFailed', reason: 'permission' }
+      if (e.killed || e.code === 'ETIMEDOUT') return { state: 'checkFailed', reason: 'timeout' }
+      return parseStatus([e.stdout, e.stderr].filter(Boolean).join('\n'))?.state === 'loggedOut'
+        ? { state: 'loggedOut' }
+        : { state: 'checkFailed', reason: 'commandFailed' }
     }
   },
 
@@ -754,7 +771,7 @@ window.services = {
       if (Object.prototype.hasOwnProperty.call(config, 'expectedRevision') && config.expectedRevision !== (existing._rev || null)) throw new Error('FRP 配置已被同步更新，请重新进入页面后再保存')
       const server = { serverAddr: '', serverPort: '7000', ...existing.server, ...config.server }
       const proxies = config.proxies !== undefined ? config.proxies : (existing.proxies || [])
-      const error = validateServer(server, false) || validateProxies(proxies, server)
+      const error = validateServer(server, false) || validateProxies(proxies, server, { checkPortConflicts: false })
       if (error) throw new Error(error)
       const hasToken = Object.prototype.hasOwnProperty.call(config.server || {}, 'token')
       const token = config.server?.token

@@ -43,7 +43,7 @@ function mount (file, overrides = {}, suppliedProps = {}, environment = {}) {
     startFileServer: async () => ({ success: true }),
     stopFileServer: () => calls.push(['stopFileServer']),
     listTunnels: async () => { calls.push(['list']); return [structuredClone(tunnel)] },
-    getLoginStatus: async () => ({ loggedIn: true }),
+    getLoginStatus: async () => ({ state: 'loggedIn' }),
     ...overrides
   }
   const window = {
@@ -106,7 +106,7 @@ function mount (file, overrides = {}, suppliedProps = {}, environment = {}) {
   }
   vm.runInNewContext(sourceCache.get(file), sandbox, { filename: file })
   const Component = sandbox.module.exports.default
-  const props = { tunnel: structuredClone(tunnel), tunnels: [structuredClone(tunnel)], loginInfo: { loggedIn: true }, showToast: (...args) => toasts.push(args), onLogin: () => {}, ...suppliedProps }
+  const props = { tunnel: structuredClone(tunnel), tunnels: [structuredClone(tunnel)], loginInfo: { state: 'loggedIn' }, showToast: (...args) => toasts.push(args), onLogin: () => {}, ...suppliedProps }
   const api = {
     calls, toasts, window,
     render () { cursor = 0; tree = Component(props); return tree },
@@ -162,14 +162,149 @@ function text (node) {
   return String(node).trim()
 }
 
+test('主页不检查登录或读取隧道，进入 Dev Tunnels 后仅在登录成功时读取', async () => {
+  let loginReads = 0
+  let listReads = 0
+  let loggedIn = false
+  const pending = deferred()
+  const ui = mount('src/App.jsx', {
+    getLoginStatus: async () => { loginReads++; return loginReads === 1 ? pending.promise : { state: loggedIn ? 'loggedIn' : 'loggedOut' } },
+    listTunnels: async () => { listReads++; return [tunnel] }
+  })
+  ui.effects(); ui.enter(); await ui.settle()
+  assert.equal(loginReads, 0)
+  assert.equal(listReads, 0)
+  ui.nodes(node => node.type === './Home')[0].props.onSelect('devtunnel')
+  await ui.settle()
+  let dashboard = ui.nodes(node => node.type === './Dashboard')[0]
+  assert.equal(dashboard.props.loginInfo.state, 'checking')
+  pending.resolve({ state: 'loggedOut' })
+  await ui.settle()
+  dashboard = ui.nodes(node => node.type === './Dashboard')[0]
+  assert.equal(dashboard.props.loginInfo.state, 'loggedOut')
+  assert.equal(listReads, 0)
+  loggedIn = true
+  await dashboard.props.onRefreshLogin()
+  await ui.settle()
+  assert.equal(listReads, 1)
+  assert.equal(ui.nodes(node => node.type === './Dashboard')[0].props.loginInfo.state, 'loggedIn')
+})
+
+test('离开 Dev Tunnels 后迟到的检查不会读取隧道', async () => {
+  const pending = deferred()
+  let reads = 0
+  const ui = mount('src/App.jsx', { getLoginStatus: () => pending.promise, listTunnels: async () => { reads++; return [] } })
+  ui.effects(); ui.enter(); await ui.settle()
+  ui.nodes(node => node.type === './Home')[0].props.onSelect('devtunnel')
+  await ui.settle()
+  ui.nodes(node => node.type === './Sidebar')[0].props.onSelect('home')
+  await ui.settle()
+  pending.resolve({ state: 'loggedIn' })
+  await ui.settle()
+  assert.equal(reads, 0)
+  assert.equal(ui.nodes(node => node.props.className === 'toast toast-error').length, 0)
+})
+
+test('登录检查失败且列表为空时仍可停止运行中的隧道', async () => {
+  let stops = 0
+  const ui = mount('src/Dashboard/index.jsx', {
+    stopHost: async () => { stops++; return stops === 1 ? { success: false, message: 'stop failed' } : { success: true } }
+  }, { loginInfo: { state: 'loggedOut' }, tunnels: [] })
+  ui.setHost(true, 'test-tunnel')
+  ui.effects(); ui.emit('tunnel-host-status'); await ui.settle()
+  assert.ok(ui.nodes(node => text(node).includes('test-tunnel')).length)
+  const stop = ui.button('停止运行中的隧道')
+  assert.equal(stop.props.disabled, undefined)
+  await ui.click('停止运行中的隧道')
+  assert.match(ui.toasts.at(-1)[0], /stop failed/)
+  assert.ok(ui.button('停止运行中的隧道'))
+  ui.setHost(false, null)
+  await ui.click('停止运行中的隧道')
+  assert.equal(stops, 2)
+  assert.equal(ui.nodes(node => node.type === 'button' && text(node) === '停止运行中的隧道').length, 0)
+})
+
+test('运行中的隧道已在列表中时不重复显示停止入口', async () => {
+  const ui = mount('src/Dashboard/index.jsx')
+  ui.setHost(true, 'test-tunnel')
+  ui.effects(); ui.emit('tunnel-host-status'); await ui.settle()
+  assert.equal(ui.nodes(node => node.type === 'button' && text(node) === '停止运行中的隧道').length, 0)
+  assert.ok(ui.button('停止'))
+})
+
+test('未确认登录或登录失败时不能新建隧道', async () => {
+  for (const loginInfo of [{ state: 'checking' }, { state: 'loggedOut' }, { state: 'checkFailed' }]) {
+    const ui = mount('src/Dashboard/index.jsx', {}, { loginInfo, tunnels: [] })
+    assert.equal(ui.button('+ 新建隧道').props.disabled, true)
+    assert.equal(ui.button('刷新列表').props.disabled, true)
+  }
+  const ui = mount('src/Dashboard/index.jsx', {}, { loginInfo: { state: 'loggedIn' }, tunnels: [] })
+  assert.equal(ui.button('+ 新建隧道').props.disabled, false)
+})
+
+test('登录检查失败和未登录显示不同提示', () => {
+  const loggedOut = mount('src/Dashboard/index.jsx', {}, { loginInfo: { state: 'loggedOut' }, tunnels: [] })
+  assert.ok(loggedOut.nodes(node => node.props.className === 'login-hint' && text(node).includes('请登录')).length)
+  const failed = mount('src/Dashboard/index.jsx', {}, { loginInfo: { state: 'checkFailed', reason: 'timeout' }, tunnels: [] })
+  assert.ok(failed.nodes(node => node.props.className === 'login-hint' && text(node).includes('超时')).length)
+  assert.equal(failed.nodes(node => node.props.className === 'badge badge-orange' && text(node) === '检查失败').length, 1)
+})
+
+test('登录检查成功后列表请求失败不改成未登录', async () => {
+  const ui = mount('src/App.jsx', {
+    getLoginStatus: async () => ({ state: 'loggedIn' }),
+    listTunnels: async () => { throw new Error('offline') }
+  })
+  ui.effects(); ui.enter(); await ui.settle()
+  ui.nodes(node => node.type === './Home')[0].props.onSelect('devtunnel')
+  await ui.settle()
+  assert.equal(ui.nodes(node => node.type === './Dashboard')[0].props.loginInfo.state, 'loggedIn')
+  assert.ok(ui.nodes(node => node.props.className === 'toast toast-error' && text(node).includes('刷新隧道列表失败')).length)
+})
+
+test('主页四个卡片打开对应功能，首次进入显示主页', async () => {
+  const chosen = []
+  const home = mount('src/Home/index.jsx', {}, { onSelect: key => chosen.push(key) })
+  for (const label of ['免费内网穿透', 'FRP 内网穿透', '共享文件夹', '使用帮助']) {
+    const button = home.nodes(node => node.type === 'button' && text(node).includes(label))[0]
+    assert.ok(button, label)
+    button.props.onClick()
+  }
+  assert.deepEqual(chosen, ['devtunnel', 'frp', 'proxydir', 'tutorial'])
+  const app = mount('src/App.jsx')
+  app.effects(); app.enter(); await app.settle()
+  assert.ok(app.nodes(node => node.type === './Home').length)
+  app.nodes(node => node.type === './Home')[0].props.onSelect('devtunnel')
+  await app.settle()
+  assert.ok(app.nodes(node => node.type === './Dashboard').length)
+  app.nodes(node => node.type === './Sidebar')[0].props.onSelect('home')
+  await app.settle()
+  assert.ok(app.nodes(node => node.type === './Home').length)
+})
+
+test('旧共享文件夹隧道在列表和详情中显示新名称', async () => {
+  const directory = { ...tunnel, description: '代理目录: C:/shared' }
+  const dashboard = mount('src/Dashboard/index.jsx', {}, { tunnels: [directory] })
+  assert.ok(dashboard.nodes(node => node.props.className === 'tunnel-desc' && text(node) === '共享文件夹: C:/shared').length)
+  const ui = mount('src/TunnelDetail/index.jsx', { getTunnelWithPorts: async () => directory }, { tunnel: directory })
+  ui.effects(); await ui.settle()
+  assert.ok(ui.nodes(node => node.props.className === 'info-val' && text(node) === '共享文件夹: C:/shared').length)
+  await ui.click('编辑')
+  assert.equal(ui.nodes(node => node.type === 'input' && node.props.type === 'text')[0].props.value, '共享文件夹: C:/shared')
+  ui.change('text', '共享文件夹: C:/updated')
+  await ui.click('保存')
+  assert.equal(ui.calls[0][2].description, '代理目录: C:/updated')
+})
+
 test('App 旧列表请求迟到时不能覆盖强制刷新结果，侧边栏返回也刷新', async () => {
   const pending = deferred()
   const updated = { ...tunnel, description: 'updated' }
   let requests = 0
   const ui = mount('src/App.jsx', { listTunnels: () => ++requests === 1 ? pending.promise : Promise.resolve([updated]) })
   ui.effects()
-  ui.enter()
   const sidebar = ui.nodes(node => node.type === './Sidebar')[0]
+  sidebar.props.onSelect('devtunnel')
+  await ui.settle()
   await ui.nodes(node => node.type === './Dashboard')[0].props.onRefresh()
   pending.resolve([tunnel])
   await ui.settle()
@@ -453,7 +588,7 @@ test('saving locks fields and cancel until completion', async () => {
 test('App returning from detail forces a list reload despite recent cache', async () => {
   const ui = mount('src/App.jsx')
   ui.effects()
-  ui.enter()
+  ui.nodes(node => node.type === './Sidebar')[0].props.onSelect('devtunnel')
   await ui.settle()
   const dashboard = ui.nodes(node => node.type === './Dashboard')[0]
   dashboard.props.onSelectTunnel(structuredClone(tunnel))
@@ -596,7 +731,7 @@ for (const file of ['src/Dashboard/index.jsx', 'src/TunnelDetail/index.jsx']) {
 test('App 刷新失败保留已加载列表，并报告失败', async () => {
   let reads = 0
   const ui = mount('src/App.jsx', { listTunnels: async () => { if (++reads > 1) throw new Error('offline'); return [tunnel] } })
-  ui.effects(); ui.enter(); await ui.settle()
+  ui.effects(); ui.nodes(node => node.type === './Sidebar')[0].props.onSelect('devtunnel'); await ui.settle()
   await ui.nodes(node => node.type === './Dashboard')[0].props.onRefresh()
   await ui.settle()
   assert.equal(ui.nodes(node => node.type === './Dashboard')[0].props.tunnels.length, 1)
@@ -613,6 +748,75 @@ test('设置页不会把清除失败显示为成功', async () => {
   await ui.settle()
   assert.equal(ui.toasts.at(-1)[1], 'error')
   assert.match(ui.toasts.at(-1)[0], /conflict/)
+})
+
+test('FRP 复制代理打开预填的新建表单，创建时保留原规则', async () => {
+  const proxies = [
+    { name: 'web', type: 'tcp', localPort: 3000, remotePort: 6000 },
+    { name: 'web-副本', type: 'tcp', localPort: 3001, remotePort: 6001 }
+  ]
+  const writes = []
+  const ui = await frpUi({
+    getFrpConfig: async () => ({ revision: '1', server: { serverAddr: 'example.com', serverPort: 7000 }, proxies }),
+    saveFrpConfig: async config => { writes.push(config); return { success: true, revision: '2' } }
+  })
+  ui.nodes(node => node.type === 'button' && node.props['aria-label'] === '复制代理 web')[0].props.onClick()
+  await ui.settle()
+  const field = id => ui.nodes(node => node.props.id === id)[0]
+  assert.equal(field('frppage-field-1').props.value, 'web-副本-2')
+  assert.equal(field('frppage-field-3').props.value, '3000')
+  assert.equal(field('frppage-field-4').props.value, '6000')
+  assert.equal(writes.length, 0)
+  await ui.click('创建')
+  assert.equal(writes.length, 1)
+  assert.equal(writes[0].expectedRevision, '1')
+  assert.equal(writes[0].proxies.length, 3)
+  assert.equal(writes[0].proxies[0].name, 'web')
+  assert.equal(writes[0].proxies[2].name, 'web-副本-2')
+  assert.equal(writes[0].proxies[2].remotePort, 6000)
+})
+
+test('FRP 复制 HTTP 代理时保留域名并提示修改', async () => {
+  const proxies = [{ name: 'site', type: 'http', localPort: 3000, customDomain: 'example.com' }]
+  const ui = await frpUi({ getFrpConfig: async () => ({ revision: '1', server: { serverAddr: 'example.com', serverPort: 7000 }, proxies }) })
+  ui.nodes(node => node.type === 'button' && node.props['aria-label'] === '复制代理 site')[0].props.onClick()
+  await ui.settle()
+  const domain = ui.nodes(node => node.props.id === 'frppage-field-5')[0]
+  assert.equal(domain.props.value, 'example.com')
+  assert.ok(ui.nodes(node => node.type === 'div' && text(node) === '该域名已被其他代理使用，请修改后创建').length)
+  domain.props.onChange({ target: { value: 'other.example.com' } })
+  await ui.settle()
+  assert.equal(ui.nodes(node => node.type === 'div' && text(node) === '该域名已被其他代理使用，请修改后创建').length, 0)
+})
+
+test('FRP 勾选时标出冲突端口和代理，取消勾选后恢复启动', async () => {
+  const proxies = [
+    { name: 'web', type: 'tcp', localPort: 3000, remotePort: 6000 },
+    { name: 'api', type: 'tcp', localPort: 3001, remotePort: '06000' },
+    { name: 'listener', type: 'tcp', localPort: 3002, remotePort: 7000 },
+    { name: 'site', type: 'http', localPort: 3003, customDomain: 'example.com' }
+  ]
+  const ui = await frpUi({ getFrpConfig: async () => ({ revision: '1', server: { serverAddr: 'example.com', serverPort: 7000 }, proxies }) })
+  const select = async (name, checked) => {
+    ui.nodes(node => node.type === 'input' && node.props['aria-label'] === '选择代理 ' + name)[0].props.onChange({ target: { checked } })
+    await ui.settle()
+  }
+  await select('web', true)
+  assert.equal(ui.nodes(node => node.props.className === 'frp-conflicts').length, 0)
+  await select('api', true)
+  let warning = ui.nodes(node => node.props.className === 'frp-conflicts')[0]
+  assert.match(text(warning), /端口\s*6000.*web、api/)
+  assert.equal(ui.nodes(node => node.props.className?.includes('frp-proxy-conflict')).length, 2)
+  assert.equal(ui.button('启动选中 (2)').props.disabled, true)
+  await select('listener', true)
+  warning = ui.nodes(node => node.props.className === 'frp-conflicts')[0]
+  assert.match(text(warning), /端口\s*7000.*listener.*服务器监听端口/)
+  await select('site', true)
+  assert.equal(ui.nodes(node => node.props.className?.includes('frp-proxy-conflict')).length, 3)
+  await select('api', false)
+  await select('listener', false)
+  assert.equal(ui.nodes(node => node.props.className === 'frp-conflicts').length, 0)
+  assert.equal(ui.button('启动选中 (2)').props.disabled, false)
 })
 
 test('FRP 启动前重读服务器配置，代理版本变化时先刷新供用户确认', async () => {

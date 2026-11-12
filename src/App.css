@@ -131,8 +131,6 @@ html, body {
 }
 
 .card::before,
-.about-card::before,
-.tutorial-card::before,
 .workbench-panel::before,
 .account-strip::before,
 .log-panel::before,
@@ -160,8 +158,6 @@ html, body {
 }
 
 .card:hover,
-.about-card:hover,
-.tutorial-card:hover,
 .workbench-panel:hover,
 .account-strip:hover,
 .log-panel:hover,
@@ -171,8 +167,6 @@ html, body {
 }
 
 .card:hover::before,
-.about-card:hover::before,
-.tutorial-card:hover::before,
 .workbench-panel:hover::before,
 .account-strip:hover::before,
 .log-panel:hover::before,
@@ -206,6 +200,9 @@ html, body {
 }
 
 .card-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   font-size: 14px;
   font-weight: 600;
   color: var(--text-title);
@@ -245,6 +242,10 @@ html, body {
 .btn-danger {
   background: var(--red);
   color: #fff;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: #dc2626;
 }
 
 .btn-warning {
@@ -345,6 +346,56 @@ html, body {
   font-size: 11px;
   color: var(--text-sub);
   margin-top: 4px;
+}
+
+.status-info {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+  color: var(--text-sub);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.status-info-label {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.status-info-value {
+  min-width: 0;
+  color: var(--text);
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+  font-size: inherit;
+  line-height: inherit;
+  overflow-wrap: anywhere;
+}
+
+.page-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text-sub);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.page-notice > svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--brand);
+}
+
+.page-notice.is-error,
+.page-notice.is-error > svg {
+  color: var(--red);
 }
 
 .form-checkbox {
@@ -501,8 +552,7 @@ html, body {
 .frp-guide-title svg,
 .tutorial-title svg,
 .tutorial-faq-title svg {
-  vertical-align: middle;
-  margin-right: 4px;
+  flex-shrink: 0;
 }
 
 .empty-icon {
@@ -513,12 +563,6 @@ html, body {
 
 .login-option-icon svg {
   vertical-align: middle;
-}
-
-.tutorial-tip b svg,
-.tutorial-warning b svg {
-  vertical-align: middle;
-  margin-right: 2px;
 }
 
 /* ==================== 滚动条 ==================== */

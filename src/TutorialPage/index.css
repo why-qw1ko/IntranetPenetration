@@ -1,5 +1,5 @@
 .tutorial-page {
-  padding: 24px 28px;
+  padding: 4px;
   max-width: 920px;
   margin: 0 auto;
 }
@@ -32,10 +32,6 @@
   transition: box-shadow 0.2s;
 }
 
-.tutorial-card:hover {
-  box-shadow: var(--shadow-lg, 0 4px 16px rgba(0,0,0,0.08));
-}
-
 .tutorial-card-title {
   font-size: 15px;
   font-weight: 600;
@@ -66,14 +62,36 @@ ol.tutorial-steps {
   border-top: 1px solid var(--border);
 }
 
+.tutorial-tip,
+.tutorial-warning {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.tutorial-tip > svg,
+.tutorial-warning > svg {
+  display: block;
+  margin-top: 3px;
+}
+
+.tutorial-tip > svg {
+  color: var(--brand);
+}
+
+.tutorial-warning > svg {
+  color: var(--orange);
+}
+
 .tutorial-tip {
   background: var(--brand-bg);
   border: 1px solid rgba(37, 99, 235, 0.14);
   padding: 12px 16px;
   border-radius: var(--radius-xs);
-  font-size: 12px;
   color: var(--text);
-  line-height: 1.8;
   margin: 12px 0;
 }
 
@@ -86,9 +104,7 @@ ol.tutorial-steps {
   border: 1px solid rgba(245, 158, 11, 0.18);
   padding: 12px 16px;
   border-radius: var(--radius-xs);
-  font-size: 12px;
   color: var(--text);
-  line-height: 1.8;
   margin: 12px 0;
 }
 
@@ -135,6 +151,11 @@ ol.tutorial-steps {
 
 .tutorial-faq-q {
   display: flex;
+  width: 100%;
+  border: 0;
+  background: none;
+  text-align: left;
+  font-family: inherit;
   align-items: center;
   justify-content: space-between;
   padding: 12px 0;
@@ -150,14 +171,20 @@ ol.tutorial-steps {
   color: var(--brand);
 }
 
-.tutorial-faq-q span {
-  transition: transform 0.2s;
-  font-size: 12px;
+.tutorial-faq-chevron {
+  flex-shrink: 0;
+  margin-left: 8px;
   color: var(--text-muted);
+  transition: transform 0.2s;
 }
 
-.tutorial-faq-q.expanded span {
+.tutorial-faq-q.expanded .tutorial-faq-chevron {
   transform: rotate(90deg);
+}
+
+.tutorial-faq-q:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
 }
 
 .tutorial-faq-a {
@@ -216,6 +243,16 @@ ol.tutorial-steps {
   color: var(--text);
 }
 
+.tutorial-table-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tutorial-table-status svg {
+  flex-shrink: 0;
+}
+
 .tutorial-link {
   color: var(--brand);
   text-decoration: none;
@@ -227,7 +264,7 @@ ol.tutorial-steps {
 
 @media (max-width: 860px) {
   .tutorial-page {
-    padding: 16px 12px;
+    padding: 0;
   }
 
   .tutorial-card {

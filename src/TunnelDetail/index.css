@@ -1,3 +1,13 @@
+.detail-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.detail-title svg {
+  flex-shrink: 0;
+}
+
 .info-grid {
   display: flex;
   flex-direction: column;
@@ -30,11 +40,19 @@
 }
 
 .info-val.url {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
   color: var(--brand);
   cursor: pointer;
   text-decoration: underline;
   text-decoration-style: dotted;
   text-underline-offset: 3px;
+}
+
+.info-val.url svg {
+  flex-shrink: 0;
 }
 
 .info-val.url:hover { opacity: 0.7; }

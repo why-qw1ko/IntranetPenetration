@@ -236,8 +236,8 @@ export default function TunnelDetail ({ tunnel: initialTunnel, onBack, showToast
               <path d='M10 12L6 8L10 4' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round' />
             </svg>
           </button>
-          <span className='topbar-title'>
-            {dirProxyPath ? <><FolderOpen size={16} style={{ marginRight: 4, verticalAlign: 'middle' }} />代理目录详情</> : '隧道详情'}
+          <span className='topbar-title detail-title'>
+            {dirProxyPath ? <><FolderOpen size={16} />共享文件夹详情</> : '隧道详情'}
           </span>
           {running && <span className='badge badge-success'>运行中</span>}
           {loading && <span className='spinner' />}
@@ -281,7 +281,7 @@ export default function TunnelDetail ({ tunnel: initialTunnel, onBack, showToast
             </div>
             {dirProxyPath && (
               <div className='info-item'>
-                <span className='info-label'>代理目录</span>
+                <span className='info-label'>共享文件夹</span>
                 <span className='info-val' style={{ color: 'var(--blue)' }}>{dirProxyPath}</span>
               </div>
             )}
@@ -303,7 +303,7 @@ export default function TunnelDetail ({ tunnel: initialTunnel, onBack, showToast
                   </div>
                   <div className='info-item'>
                     <span className='info-label'>描述</span>
-                    <input className='form-input' type='text' disabled={loading || saving} value={description} onChange={(e) => setDescription(e.target.value)} placeholder='隧道用途说明' />
+                    <input className='form-input' type='text' disabled={loading || saving} value={dirProxyPath ? description.replace(/^代理目录: /, '共享文件夹: ') : description} onChange={(e) => setDescription(dirProxyPath ? e.target.value.replace(/^共享文件夹: /, '代理目录: ') : e.target.value)} placeholder='隧道用途说明' />
                   </div>
                 </>
                 )
@@ -316,7 +316,7 @@ export default function TunnelDetail ({ tunnel: initialTunnel, onBack, showToast
                   {tunnel.description && (
                     <div className='info-item'>
                       <span className='info-label'>描述</span>
-                      <span className='info-val'>{tunnel.description}</span>
+                      <span className='info-val'>{tunnel.description.replace(/^代理目录: /, '共享文件夹: ')}</span>
                     </div>
                   )}
                   <div className='info-item'>

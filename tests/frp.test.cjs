@@ -21,6 +21,8 @@ test('阻止代理名称、远程端口、规范化域名重复和服务器监�
   assert.match(validateProxies([tcp('web'), tcp('web', 6001)], server), /名称.*已存在/)
   assert.match(validateProxies([tcp('web'), tcp('api', '06000')], server), /6000.*web/)
   assert.match(validateProxies([tcp('web', 7000)], server), /监听端口冲突/)
+  assert.equal(validateProxies([tcp('web'), tcp('api', '06000'), tcp('listener', 7000)], server, { checkPortConflicts: false }), '')
+  assert.match(validateProxies([tcp('web'), tcp('web', 6001)], server, { checkPortConflicts: false }), /名称.*已存在/)
   const http = (name, customDomain) => ({ name, type: 'http', localPort: 3000, customDomain })
   assert.match(validateProxies([http('a', 'EXAMPLE.com.'), http('b', 'example.com')], server), /域名.*已被/)
   assert.match(validateProxies([http('a', 'http://example.com')], server), /有效域名/)

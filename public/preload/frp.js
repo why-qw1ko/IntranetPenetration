@@ -10,7 +10,7 @@ function validateServer (server, required = true) {
   return ''
 }
 
-function validateProxies (proxies, server) {
+function validateProxies (proxies, server, { checkPortConflicts = true } = {}) {
   if (!Array.isArray(proxies)) return '代理规则格式无效'
   const names = new Set()
   const ports = new Map()
@@ -26,8 +26,8 @@ function validateProxies (proxies, server) {
     if (proxy.type === 'tcp') {
       if (!isPort(proxy.remotePort)) return `「${name}」的远程端口必须是 1–65535 的整数`
       const port = Number(proxy.remotePort)
-      if (port === Number(server?.serverPort)) return `远程端口 ${port} 与服务器监听端口冲突`
-      if (ports.has(port)) return `远程端口 ${port} 已被「${ports.get(port)}」使用`
+      if (checkPortConflicts && port === Number(server?.serverPort)) return `远程端口 ${port} 与服务器监听端口冲突`
+      if (checkPortConflicts && ports.has(port)) return `远程端口 ${port} 已被「${ports.get(port)}」使用`
       ports.set(port, name)
     } else {
       const domain = typeof proxy.customDomain === 'string' ? proxy.customDomain.trim().toLowerCase().replace(/\.$/, '') : ''

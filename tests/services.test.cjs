@@ -131,6 +131,34 @@ test('配置校验拒绝非法字段及端口，不把路径或 Token 混入同�
   assert.equal(env.local.get('test-device/frp-token'), 'private')
 })
 
+test('CLI 登录检查区分状态、命令失败和未知输出，且不泄露账号或命令内容', async () => {
+  const error = (message, props = {}) => Object.assign(new Error(message), props)
+  const cases = [
+    { output: 'Logged in as test-user using GitHub.', state: 'loggedIn' },
+    { output: 'Logged in using Microsoft.', state: 'loggedIn' },
+    { output: 'Not logged in.', state: 'loggedOut' },
+    { output: 'Previously logged in as test-user\nNot logged in.', state: 'loggedOut' },
+    { output: 'Previously logged in as test-user', state: 'checkFailed', reason: 'unknownOutput' },
+    { output: '', state: 'checkFailed', reason: 'unknownOutput' },
+    { failure: error('missing', { code: 'ENOENT' }), state: 'checkFailed', reason: 'notFound' },
+    { failure: error('denied', { code: 'EACCES' }), state: 'checkFailed', reason: 'permission' },
+    { failure: error('timed out', { killed: true, signal: 'SIGTERM' }), state: 'checkFailed', reason: 'timeout' },
+    { failure: error('network secret', { code: 1 }), state: 'checkFailed', reason: 'commandFailed' },
+    { failure: error('Not logged in.', { code: 1 }), state: 'loggedOut' }
+  ]
+  for (const scenario of cases) {
+    const env = setup(args => {
+      assert.equal(args.join(' '), 'user show')
+      if (scenario.failure) throw scenario.failure
+      return scenario.output
+    })
+    const status = await env.services.getLoginStatus()
+    assert.equal(status.state, scenario.state)
+    assert.equal(status.reason, scenario.reason)
+    assert.doesNotMatch(JSON.stringify(status), /test-user|network secret/)
+  }
+})
+
 test('UTF-8 中文优先解码，GBK 错误仍可识别', async () => {
   const env = setup(creationCommand)
   assert.equal((await env.services.showTunnel(tunnel.tunnelId)).description, tunnel.description)
@@ -511,16 +539,27 @@ test('创建文本输出必须保留完整 ID，并向相同 ID 添加端口', a
   }
 })
 
-test('FRP 读取失败与没有配置可区分，修改服务器时校验完整代理配置', async () => {
+test('FRP 读取失败与没有配置可区分', async () => {
   assert.equal(await setup().services.getFrpConfig(), null)
   await assert.rejects(setup(undefined, { getError: true }).services.getFrpConfig(), /读取/)
+})
+
+test('FRP 保存重复远程端口，启动仅校验选中的规则', async () => {
   const env = setup()
-  const original = { _id: 'frp-config', server: { serverAddr: 'example.com', serverPort: 7000 }, proxies: [{ name: 'web', type: 'tcp', localPort: 3000, remotePort: 6000 }] }
-  env.docs.set('frp-config', structuredClone(original))
-  const result = await env.services.saveFrpConfig({ server: { serverPort: 6000 } })
-  assert.equal(result.success, false)
-  assert.match(result.message, /冲突/)
-  assert.deepEqual(env.docs.get('frp-config'), original)
+  env.services.getFrpcPath = () => __filename
+  const proxies = [proxy('web'), proxy('api', '06000'), proxy('listener', 7000)]
+  assert.equal((await env.services.saveFrpConfig({ server: frpServer, proxies })).success, true)
+  assert.equal((await env.services.saveFrpConfig({ server: { serverPort: 6000 } })).success, true)
+  const duplicate = await env.services.startFrpc(frpServer, proxies.slice(0, 2), 'frp')
+  assert.equal(duplicate.success, false)
+  assert.match(duplicate.message, /6000.*web/)
+  assert.equal(env.children.length, 0)
+  const listener = await env.services.startFrpc(frpServer, [proxies[2]], 'frp')
+  assert.equal(listener.success, false)
+  assert.match(listener.message, /监听端口冲突/)
+  assert.equal(env.children.length, 0)
+  assert.equal((await env.services.startFrpc(frpServer, [proxies[0]], 'frp')).success, true)
+  env.children[0].emit('close', 0)
 })
 
 test('清除数据报告失败项、允许重试，并在成功后清空本机和同步配置', () => {
